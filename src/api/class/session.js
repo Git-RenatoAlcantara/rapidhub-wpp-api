@@ -2,40 +2,27 @@
 const { WhatsAppInstance } = require('../class/instance')
 const logger = require('pino')()
 const config = require('../../config/config')
+const { prisma } = require('../helper/prismaClient')
 
 class Session {
     async restoreSessions() {
         let restoredSessions = new Array()
-        let allCollections = []
         try {
-            const db = mongoClient.db('whatsapp-api')
-            const result = await db.listCollections().toArray()
-            result.forEach((collection) => {
-                allCollections.push(collection.name)
+            const sessions = await prisma.session.findMany({
+                select: { name: true },
             })
-
-            allCollections.map((key) => {
-                const query = {}
-                db.collection(key)
-                    .find(query)
-                    .toArray(async (err, result) => {
-                        if (err) throw err
-                        const webhook = !config.webhookEnabled
-                            ? undefined
-                            : config.webhookEnabled
-                        const webhookUrl = !config.webhookUrl
-                            ? undefined
-                            : config.webhookUrl
-                        const instance = new WhatsAppInstance(
-                            key,
-                            webhook,
-                            webhookUrl
-                        )
-                        await instance.init()
-                        WhatsAppInstances[key] = instance
-                    })
+            for (const { name: key } of sessions) {
+                if (WhatsAppInstances[key]) {
+                    restoredSessions.push(key)
+                    continue
+                }
+                const webhook = config.webhookEnabled || false
+                const webhookUrl = config.webhookUrl || null
+                const instance = new WhatsAppInstance(key, webhook, webhookUrl)
+                await instance.init()
+                WhatsAppInstances[key] = instance
                 restoredSessions.push(key)
-            })
+            }
         } catch (e) {
             logger.error('Error restoring sessions')
             logger.error(e)

@@ -10,3 +10,5 @@ sessiondata
 # IDEs
 .vscode/settings.json
 .idea
+
+/src/generated/prisma

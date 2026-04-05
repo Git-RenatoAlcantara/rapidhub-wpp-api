@@ -1,5 +1,4 @@
 const dotenv = require('dotenv')
-const mongoose = require('mongoose')
 const logger = require('pino')()
 dotenv.config()
 
@@ -7,20 +6,13 @@ const app = require('./config/express')
 const config = require('./config/config')
 
 const { Session } = require('./api/class/session')
-const connectToCluster = require('./api/helper/connectMongoClient')
+const { prisma, connectPrisma } = require('./api/helper/prismaClient')
 
 let server
 
-if (config.mongoose.enabled) {
-    mongoose.set('strictQuery', true);
-    mongoose.connect(config.mongoose.url, config.mongoose.options).then(() => {
-        logger.info('Connected to MongoDB')
-    })
-}
-
 server = app.listen(config.port, async () => {
     logger.info(`Listening on port ${config.port}`)
-    global.mongoClient = await connectToCluster(config.mongoose.url)
+    await connectPrisma()
     if (config.restoreSessionsOnStartup) {
         logger.info(`Restoring Sessions`)
         const session = new Session()
@@ -31,7 +23,8 @@ server = app.listen(config.port, async () => {
 
 const exitHandler = () => {
     if (server) {
-        server.close(() => {
+        server.close(async () => {
+            await prisma.$disconnect().catch(() => null)
             logger.info('Server closed')
             process.exit(1)
         })

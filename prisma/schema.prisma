@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id         String      @id @default(uuid())
+  name       String      @unique
+  createdAt  DateTime    @default(now())
+  authStates AuthState[]
+}
+
+model AuthState {
+  id        String
+  sessionId String
+  data      Json
+  session   Session @relation(fields: [sessionId], references: [name], onDelete: Cascade)
+
+  @@id([id, sessionId])
+  @@index([sessionId])
+}
+
+model Chat {
+  key  String @id
+  chat Json?
+}

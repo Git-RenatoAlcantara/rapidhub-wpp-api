@@ -31,15 +31,13 @@ exports.demoteAdmin = async (req, res) => {
 }
 
 exports.listAll = async (req, res) => {
-    const data = await WhatsAppInstances[req.query.key].getAllGroups(
-        req.query.key
-    )
-    return res.status(201).json({ error: false, data: data })
+    const data = await WhatsAppInstances[req.query.key].getAllGroups()
+    return res.status(200).json({ error: false, data: data })
 }
 
 exports.leaveGroup = async (req, res) => {
     const data = await WhatsAppInstances[req.query.key].leaveGroup(req.query.id)
-    return res.status(201).json({ error: false, data: data })
+    return res.status(200).json({ error: false, data: data })
 }
 
 exports.getInviteCodeGroup = async (req, res) => {
@@ -47,7 +45,7 @@ exports.getInviteCodeGroup = async (req, res) => {
         req.query.id
     )
     return res
-        .status(201)
+        .status(200)
         .json({ error: false, link: 'https://chat.whatsapp.com/' + data })
 }
 
@@ -56,7 +54,7 @@ exports.getInstanceInviteCodeGroup = async (req, res) => {
         req.query.key
     ].getInstanceInviteCodeGroup(req.query.id)
     return res
-        .status(201)
+        .status(200)
         .json({ error: false, link: 'https://chat.whatsapp.com/' + data })
 }
 

@@ -4,31 +4,91 @@ const pino = require('pino')
 const {
     default: makeWASocket,
     DisconnectReason,
+    Browsers,
+    fetchLatestBaileysVersion,
 } = require('@whiskeysockets/baileys')
-const { unlinkSync } = require('fs')
 const { v4: uuidv4 } = require('uuid')
-const path = require('path')
 const processButton = require('../helper/processbtn')
 const generateVC = require('../helper/genVc')
-const Chat = require('../models/chat.model')
 const axios = require('axios')
 const config = require('../../config/config')
 const downloadMessage = require('../helper/downloadMsg')
-const logger = require('pino')()
-const useMongoDBAuthState = require('../helper/mongoAuthState')
+const sleep = require('../helper/sleep')
+const logger = pino({ level: config.log.level })
+const usePrismaAuthState = require('../helper/prismaAuthState')
+const { prisma } = require('../helper/prismaClient')
+
+function normalizeWebhookUrl(value) {
+    if (typeof value !== 'string') return null
+    const normalized = value.trim().replace(/^['"]|['"]$/g, '')
+    return normalized.length > 0 ? normalized : null
+}
+
+function createBaileysLogger() {
+    return pino({
+        level: config.log.level,
+        hooks: {
+            logMethod(args, method, level) {
+                const payload = args.find(
+                    (arg) =>
+                        arg &&
+                        typeof arg === 'object' &&
+                        !Array.isArray(arg)
+                )
+                const message =
+                    args.find((arg) => typeof arg === 'string') || ''
+
+                const isRestartRequiredStreamError =
+                    message === 'stream errored out' &&
+                    String(payload?.fullErrorNode?.attrs?.code || '') ===
+                        String(DisconnectReason.restartRequired)
+
+                const isPreKeyUploadTimeout =
+                    message ===
+                        'Failed to check/upload pre-keys during initialization' &&
+                    (payload?.error?.output?.statusCode === 408 ||
+                        payload?.error?.statusCode === 408 ||
+                        String(payload?.error?.message || '')
+                            .toLowerCase()
+                            .includes('pre-key upload timeout'))
+
+                const isMissingSessionDecrypt =
+                    message === 'failed to decrypt message' &&
+                    String(payload?.err?.message || '').includes(
+                        'No session found to decrypt message'
+                    )
+
+                if (
+                    level >= 50 &&
+                    (
+                        isRestartRequiredStreamError ||
+                        isPreKeyUploadTimeout ||
+                        isMissingSessionDecrypt
+                    )
+                ) {
+                    return this.warn(...args)
+                }
+
+                return method.apply(this, args)
+            },
+        },
+    })
+}
 
 class WhatsAppInstance {
     socketConfig = {
-        defaultQueryTimeoutMs: undefined,
+        defaultQueryTimeoutMs: void 0,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 15000,
         printQRInTerminal: false,
-        logger: pino({
-            level: config.log.level,
-        }),
+        logger: createBaileysLogger(),
     }
     key = ''
     authState
-    allowWebhook = undefined
-    webhook = undefined
+    allowWebhook
+    webhook
+    socketGeneration = 0
+    initPromise = null
 
     instance = {
         key: this.key,
@@ -37,6 +97,12 @@ class WhatsAppInstance {
         messages: [],
         qrRetry: 0,
         customWebhook: '',
+        connectionStatus: 'idle',
+        lastConnectionError: '',
+        lastDisconnectCode: null,
+        reconnectInProgress: false,
+        reconnectAttempts: 0,
+        manualLogoutInProgress: false,
     }
 
     axiosInstance = axios.create({
@@ -44,65 +110,393 @@ class WhatsAppInstance {
     })
 
     constructor(key, allowWebhook, webhook) {
+        const customWebhook = normalizeWebhookUrl(webhook)
+        const defaultWebhook = normalizeWebhookUrl(config.webhookUrl)
+        const effectiveWebhookUrl = customWebhook || defaultWebhook
+
         this.key = key ? key : uuidv4()
-        this.instance.customWebhook = this.webhook ? this.webhook : webhook
-        this.allowWebhook = config.webhookEnabled
-            ? config.webhookEnabled
-            : allowWebhook
-        if (this.allowWebhook && this.instance.customWebhook !== null) {
-            this.allowWebhook = true
-            this.instance.customWebhook = webhook
+        this.allowWebhook = config.webhookEnabled ? true : Boolean(allowWebhook)
+        this.instance.customWebhook = effectiveWebhookUrl || ''
+
+        if (this.allowWebhook && effectiveWebhookUrl) {
             this.axiosInstance = axios.create({
-                baseURL: webhook,
+                baseURL: effectiveWebhookUrl,
             })
         }
     }
 
     async SendWebhook(type, body, key) {
         if (!this.allowWebhook) return
-        this.axiosInstance
-            .post('', {
-                type,
-                body,
-                instanceKey: key,
-            })
-            .catch(() => {})
+
+        if (!this.instance.customWebhook) {
+            logger.warn(
+                {
+                    instanceKey: this.key,
+                    type,
+                },
+                'WEBHOOK: Ignored event because WEBHOOK_URL is not configured'
+            )
+            return
+        }
+
+        try {
+            await this.axiosInstance.post(
+                '',
+                {
+                    type,
+                    body,
+                    instanceKey: key,
+                },
+                {
+                    timeout: 10000,
+                }
+            )
+        } catch (error) {
+            logger.warn(
+                {
+                    instanceKey: this.key,
+                    type,
+                    error: error?.message || error,
+                },
+                'WEBHOOK: Failed to deliver event'
+            )
+        }
     }
 
     async init() {
-        this.collection = mongoClient.db('whatsapp-api').collection(this.key)
-        const { state, saveCreds } = await useMongoDBAuthState(this.collection)
+        if (this.initPromise) {
+            logger.debug(
+                {
+                    instanceKey: this.key,
+                },
+                'STATE: Initialization already in progress, waiting for current attempt'
+            )
+            return this.initPromise
+        }
+
+        this.initPromise = this.initializeSocket()
+        try {
+            return await this.initPromise
+        } finally {
+            this.initPromise = null
+        }
+    }
+
+    async initializeSocket() {
+        await this.teardownSocket()
+        await prisma.session.upsert({
+            where: { name: this.key },
+            update: {},
+            create: { name: this.key },
+        })
+        const { state, saveCreds } = await usePrismaAuthState(this.key)
         this.authState = { state: state, saveCreds: saveCreds }
-        this.socketConfig.auth = this.authState.state
-        this.socketConfig.browser = Object.values(config.browser)
-        this.instance.sock = makeWASocket(this.socketConfig)
-        this.setHandler()
+        const socketConfig = await this.buildSocketConfig()
+        socketConfig.auth = this.authState.state
+        this.instance.connectionStatus = this.instance.reconnectInProgress
+            ? 'reconnecting'
+            : 'connecting'
+        this.instance.manualLogoutInProgress = false
+        this.instance.online = false
+        this.instance.qr = ''
+        this.instance.qrRetry = 0
+        this.instance.sock = makeWASocket(socketConfig)
+        this.socketGeneration += 1
+        this.setHandler(this.socketGeneration)
         return this
     }
 
-    setHandler() {
+    async teardownSocket() {
+        const sock = this.instance?.sock
+        if (!sock) return
+
+        try {
+            if (typeof sock?.ev?.removeAllListeners === 'function') {
+                sock.ev.removeAllListeners()
+            }
+            if (typeof sock?.ws?.removeAllListeners === 'function') {
+                sock.ws.removeAllListeners()
+            }
+            if (
+                sock?.ws &&
+                typeof sock.ws.close === 'function' &&
+                sock.ws.readyState === 1
+            ) {
+                sock.ws.close()
+            }
+        } catch (error) {
+            logger.debug(
+                {
+                    instanceKey: this.key,
+                    error: error?.message || error,
+                },
+                'STATE: Failed to teardown previous socket cleanly'
+            )
+        } finally {
+            this.instance.sock = null
+        }
+    }
+
+    async buildSocketConfig() {
+        const browserName = config.browser.browser || 'Chrome'
+        const platformName = (config.browser.platform || '')
+            .toString()
+            .trim()
+            .toLowerCase()
+
+        const browserProfiles = {
+            ubuntu: Browsers.ubuntu,
+            linux: Browsers.ubuntu,
+            windows: Browsers.windows,
+            win32: Browsers.windows,
+            macos: Browsers.macOS,
+            darwin: Browsers.macOS,
+            baileys: Browsers.baileys,
+            md: Browsers.baileys,
+            whatsappmd: Browsers.baileys,
+            'whatsapp md': Browsers.baileys,
+        }
+
+        const browserFactory = browserProfiles[platformName]
+        const socketConfig = {
+            ...this.socketConfig,
+            browser: browserFactory
+                ? browserFactory(browserName)
+                : Browsers.appropriate(browserName),
+        }
+
+        try {
+            const latest = await fetchLatestBaileysVersion()
+            if (latest?.version && !latest?.error) {
+                socketConfig.version = latest.version
+            } else if (latest?.error) {
+                logger.warn(
+                    {
+                        instanceKey: this.key,
+                        error: latest.error,
+                    },
+                    'STATE: Unable to fetch latest Baileys version, using default'
+                )
+            }
+        } catch (error) {
+            logger.warn(
+                {
+                    instanceKey: this.key,
+                    error: error?.message || error,
+                },
+                'STATE: Unable to fetch latest Baileys version, using default'
+            )
+        }
+
+        return socketConfig
+    }
+
+    setDisconnectState(disconnectCode, disconnectMessage) {
+        this.instance.lastDisconnectCode = disconnectCode
+        if (
+            disconnectCode === DisconnectReason.timedOut &&
+            disconnectMessage === 'QR refs attempts ended'
+        ) {
+            this.instance.lastConnectionError =
+                'QR Code expirou antes do escaneamento. Gere um novo QR e escaneie imediatamente.'
+            return
+        }
+
+        if (disconnectCode === 405) {
+            this.instance.lastConnectionError =
+                'Connection Failure (405). O WhatsApp rejeitou o registro deste dispositivo no momento.'
+            return
+        }
+
+        if (disconnectCode === DisconnectReason.timedOut || disconnectCode === 408) {
+            this.instance.lastConnectionError =
+                'Request Time-out durante inicializacao (pre-keys). Reconectando automaticamente.'
+            return
+        }
+
+        if (disconnectCode === DisconnectReason.restartRequired) {
+            this.instance.lastConnectionError =
+                'Stream Errored (restart required). Reconectando automaticamente.'
+            return
+        }
+
+        this.instance.lastConnectionError = disconnectMessage
+    }
+
+    isTerminalDisconnectCode(disconnectCode) {
+        return [
+            DisconnectReason.loggedOut,
+            DisconnectReason.badSession,
+            DisconnectReason.multideviceMismatch,
+            DisconnectReason.forbidden,
+        ].includes(disconnectCode)
+    }
+
+    async reconnectInstance(disconnectCode) {
+        const maxReconnectAttempts = 10
+        if (this.instance.manualLogoutInProgress) {
+            logger.info(
+                {
+                    instanceKey: this.key,
+                    disconnectCode,
+                },
+                'STATE: Manual logout in progress, skipping reconnect'
+            )
+            return
+        }
+
+        if (this.instance.reconnectInProgress) {
+            logger.debug(
+                {
+                    instanceKey: this.key,
+                    disconnectCode,
+                },
+                'STATE: Reconnect already in progress, skipping duplicate reconnect'
+            )
+            return
+        }
+
+        if (this.instance.reconnectAttempts >= maxReconnectAttempts) {
+            this.instance.lastConnectionError =
+                'Numero maximo de tentativas de reconexao atingido. Tente iniciar a instancia novamente.'
+            logger.error(
+                {
+                    instanceKey: this.key,
+                    disconnectCode,
+                    reconnectAttempts: this.instance.reconnectAttempts,
+                    maxReconnectAttempts,
+                },
+                'STATE: Max reconnect attempts reached'
+            )
+            return
+        }
+
+        this.instance.reconnectInProgress = true
+        this.instance.reconnectAttempts++
+
+        this.instance.connectionStatus = 'reconnecting'
+        const isPreKeyOrRequestTimeout =
+            disconnectCode === DisconnectReason.timedOut || disconnectCode === 408
+        const baseWaitMs = isPreKeyOrRequestTimeout
+            ? 4500
+            : disconnectCode === DisconnectReason.restartRequired
+              ? 2500
+              : 2000
+        const waitMs = Math.min(
+            baseWaitMs * this.instance.reconnectAttempts,
+            15000
+        )
+        logger.warn(
+            {
+                instanceKey: this.key,
+                disconnectCode,
+                reconnectAttempts: this.instance.reconnectAttempts,
+                waitMs,
+            },
+            'STATE: Reinitializing instance after disconnect'
+        )
+
+        try {
+            await sleep(waitMs)
+            await this.init()
+        } catch (error) {
+            logger.error(
+                {
+                    instanceKey: this.key,
+                    disconnectCode,
+                    reconnectAttempts: this.instance.reconnectAttempts,
+                    error: error?.message || error,
+                },
+                'STATE: Failed to reinitialize instance'
+            )
+        } finally {
+            this.instance.reconnectInProgress = false
+        }
+    }
+
+    setHandler(currentSocketGeneration = this.socketGeneration) {
         const sock = this.instance.sock
+        const isStaleSocket = () =>
+            currentSocketGeneration !== this.socketGeneration ||
+            sock !== this.instance.sock
         // on credentials update save state
-        sock?.ev.on('creds.update', this.authState.saveCreds)
+        sock?.ev.on('creds.update', async () => {
+            if (isStaleSocket()) return
+            await this.authState.saveCreds()
+        })
 
         // on socket closed, opened, connecting
         sock?.ev.on('connection.update', async (update) => {
+            if (isStaleSocket()) return
             const { connection, lastDisconnect, qr } = update
+
+            if (connection) {
+                this.instance.connectionStatus = connection
+                logger.debug(
+                    {
+                        instanceKey: this.key,
+                        connection,
+                        hasQr: Boolean(qr),
+                        qrRetry: this.instance.qrRetry,
+                    },
+                    'STATE: WhatsApp connection update'
+                )
+            }
 
             if (connection === 'connecting') return
 
             if (connection === 'close') {
-                // reconnect if not logged out
-                if (
-                    lastDisconnect?.error?.output?.statusCode !==
-                    DisconnectReason.loggedOut
-                ) {
-                    await this.init()
+                this.instance.online = false
+                this.instance.qr = ''
+                const disconnectCode =
+                    lastDisconnect?.error?.output?.statusCode || null
+                const disconnectMessage =
+                    lastDisconnect?.error?.message ||
+                    lastDisconnect?.error?.output?.payload?.message ||
+                    'Unknown connection error'
+
+                this.setDisconnectState(disconnectCode, disconnectMessage)
+
+                const isExpectedTransientClose =
+                    disconnectCode === DisconnectReason.restartRequired ||
+                    disconnectCode === DisconnectReason.timedOut ||
+                    disconnectCode === 408
+
+                logger[isExpectedTransientClose ? 'warn' : 'error'](
+                    {
+                        instanceKey: this.key,
+                        connection,
+                        disconnectCode,
+                        disconnectMessage,
+                        reconnectAttempts: this.instance.reconnectAttempts,
+                        lastDisconnect:
+                            lastDisconnect?.error?.output?.payload || null,
+                    },
+                    'STATE: WhatsApp connection closed'
+                )
+
+                if (this.instance.manualLogoutInProgress) {
+                    logger.info(
+                        {
+                            instanceKey: this.key,
+                            disconnectCode,
+                        },
+                        'STATE: Manual logout close event received'
+                    )
+                } else if (this.isTerminalDisconnectCode(disconnectCode)) {
+                    await this.deleteSessionData(this.key)
+                } else if (disconnectCode === 405) {
+                    logger.error(
+                        {
+                            instanceKey: this.key,
+                            disconnectCode,
+                            guidance:
+                                'Create a new session key and try again later. This is usually an upstream WhatsApp registration rejection.',
+                        },
+                        'STATE: Stopping reconnect due to upstream connection failure'
+                    )
                 } else {
-                    await this.collection.drop().then((r) => {
-                        logger.info('STATE: Droped collection')
-                    })
-                    this.instance.online = false
+                    await this.reconnectInstance(disconnectCode)
                 }
 
                 if (
@@ -121,16 +515,36 @@ class WhatsAppInstance {
                         this.key
                     )
             } else if (connection === 'open') {
-                if (config.mongoose.enabled) {
-                    let alreadyThere = await Chat.findOne({
+                this.instance.lastConnectionError = ''
+                this.instance.lastDisconnectCode = null
+                this.instance.reconnectAttempts = 0
+                this.instance.manualLogoutInProgress = false
+                logger.info(
+                    {
+                        instanceKey: this.key,
+                    },
+                    'STATE: WhatsApp connection opened'
+                )
+                await prisma.chat.upsert({
+                    where: { key: this.key },
+                    update: {},
+                    create: {
                         key: this.key,
-                    }).exec()
-                    if (!alreadyThere) {
-                        const saveChat = new Chat({ key: this.key })
-                        await saveChat.save()
-                    }
-                }
+                        chat: [],
+                    },
+                })
                 this.instance.online = true
+                try {
+                    await this.getAllGroups()
+                } catch (error) {
+                    logger.debug(
+                        {
+                            instanceKey: this.key,
+                            error: error?.message || error,
+                        },
+                        'STATE: Failed to refresh group cache on open'
+                    )
+                }
                 if (
                     [
                         'all',
@@ -150,16 +564,17 @@ class WhatsAppInstance {
 
             if (qr) {
                 QRCode.toDataURL(qr).then((url) => {
+                    if (isStaleSocket()) return
                     this.instance.qr = url
                     this.instance.qrRetry++
-                    if (this.instance.qrRetry >= config.instance.maxRetryQr) {
-                        // close WebSocket connection
-                        this.instance.sock.ws.close()
-                        // remove all events
-                        this.instance.sock.ev.removeAllListeners()
-                        this.instance.qr = ' '
-                        logger.info('socket connection terminated')
-                    }
+                    this.instance.connectionStatus = 'qr'
+                    logger.debug(
+                        {
+                            instanceKey: this.key,
+                            qrRetry: this.instance.qrRetry,
+                        },
+                        'STATE: QR code updated'
+                    )
                 })
             }
         })
@@ -233,6 +648,26 @@ class WhatsAppInstance {
         sock?.ev.on('messages.upsert', async (m) => {
             //console.log('messages.upsert')
             //console.log(m)
+            logger.info(
+                {
+                    instanceKey: this.key,
+                    upsertType: m?.type,
+                    messageCount: Array.isArray(m?.messages)
+                        ? m.messages.length
+                        : 0,
+                },
+                'DEBUG: messages.upsert event received'
+            )
+            console.log(
+                '[messages.upsert]',
+                JSON.stringify({
+                    instanceKey: this.key,
+                    upsertType: m?.type,
+                    messageCount: Array.isArray(m?.messages)
+                        ? m.messages.length
+                        : 0,
+                })
+            )
             if (m.type === 'prepend')
                 this.instance.messages.unshift(...m.messages)
             if (m.type !== 'notify') return
@@ -252,6 +687,27 @@ class WhatsAppInstance {
             this.instance.messages.unshift(...m.messages)
 
             m.messages.map(async (msg) => {
+                logger.info(
+                    {
+                        instanceKey: this.key,
+                        upsertType: m?.type,
+                        remoteJid: msg?.key?.remoteJid,
+                        messageId: msg?.key?.id,
+                        fromMe: msg?.key?.fromMe,
+                    },
+                    'DEBUG: messages.upsert message payload received'
+                )
+                console.log(
+                    '[messages.upsert.message]',
+                    JSON.stringify({
+                        instanceKey: this.key,
+                        upsertType: m?.type,
+                        remoteJid: msg?.key?.remoteJid,
+                        messageId: msg?.key?.id,
+                        fromMe: msg?.key?.fromMe,
+                    })
+                )
+
                 if (!msg.message) return
 
                 const messageType = Object.keys(msg.message)[0]
@@ -305,7 +761,7 @@ class WhatsAppInstance {
             })
         })
 
-        sock?.ev.on('messages.update', async (messages) => {
+        sock?.ev.on('messages.update', async () => {
             //console.log('messages.update')
             //console.dir(messages);
         })
@@ -417,10 +873,44 @@ class WhatsAppInstance {
 
     async deleteInstance(key) {
         try {
-            await Chat.findOneAndDelete({ key: key })
+            await this.teardownSocket()
+            await this.deleteSessionData(key)
         } catch (e) {
             logger.error('Error updating document failed')
         }
+    }
+
+    async logoutInstance() {
+        let logoutError = null
+        this.instance.manualLogoutInProgress = true
+        this.instance.reconnectInProgress = false
+        this.instance.connectionStatus = 'logging_out'
+
+        try {
+            await this.instance?.sock?.logout()
+        } catch (error) {
+            logoutError = error
+            logger.warn(
+                {
+                    instanceKey: this.key,
+                    error: error?.message || error,
+                },
+                'STATE: Logout request returned with error'
+            )
+        }
+
+        await sleep(300)
+        await this.teardownSocket()
+        await this.deleteSessionData(this.key)
+        this.instance.online = false
+        this.instance.qr = ''
+        this.instance.reconnectAttempts = 0
+        this.instance.lastDisconnectCode = DisconnectReason.loggedOut
+        this.instance.lastConnectionError = ''
+        this.instance.connectionStatus = 'idle'
+        this.instance.manualLogoutInProgress = false
+
+        return logoutError
     }
 
     async getInstanceDetail(key) {
@@ -625,14 +1115,13 @@ class WhatsAppInstance {
             let groups = await this.groupFetchAllParticipating()
             let Chats = await this.getChat()
             if (groups && Chats) {
-                for (const [key, value] of Object.entries(groups)) {
+                for (const value of Object.values(groups)) {
                     let group = Chats.find((c) => c.id === value.id)
                     if (group) {
                         let participants = []
-                        for (const [
-                            key_participant,
-                            participant,
-                        ] of Object.entries(value.participants)) {
+                        for (const participant of Object.values(
+                            value.participants
+                        )) {
                             participants.push(participant)
                         }
                         group.participant = participants
@@ -715,17 +1204,110 @@ class WhatsAppInstance {
     }
 
     async getAllGroups() {
-        let Chats = await this.getChat()
-        return Chats.filter((c) => c.id.includes('@g.us')).map((data, i) => {
-            return {
-                index: i,
-                name: data.name,
-                jid: data.id,
-                participant: data.participant,
-                creation: data.creation,
-                subjectOwner: data.subjectOwner,
+        const mapChatsToGroupList = (chats = []) =>
+            chats
+                .filter(
+                    (chat) =>
+                        typeof chat?.id === 'string' &&
+                        chat.id.includes('@g.us')
+                )
+                .map((data, i) => {
+                    return {
+                        index: i,
+                        name: data?.name || data?.subject || '',
+                        jid: data.id,
+                        participant: Array.isArray(data?.participant)
+                            ? data.participant
+                            : [],
+                        creation: data?.creation || null,
+                        subjectOwner: data?.subjectOwner || null,
+                    }
+                })
+
+        if (this.instance?.online && this.instance?.sock) {
+            try {
+                const groups = await this.groupFetchAllParticipating()
+                const liveGroups = Object.values(groups || {})
+                    .map((group, i) => {
+                        const participants = Array.isArray(group?.participants)
+                            ? group.participants
+                            : Object.values(group?.participants || {})
+
+                        return {
+                            index: i,
+                            name: group?.subject || group?.name || '',
+                            jid: group?.id,
+                            participant: participants,
+                            creation: group?.creation || null,
+                            subjectOwner: group?.subjectOwner || null,
+                        }
+                    })
+                    .filter(
+                        (group) =>
+                            typeof group?.jid === 'string' &&
+                            group.jid.includes('@g.us')
+                    )
+
+                if (liveGroups.length > 0) {
+                    try {
+                        const chats = await this.getChat()
+                        const nonGroupChats = chats.filter(
+                            (chat) =>
+                                !(
+                                    typeof chat?.id === 'string' &&
+                                    chat.id.includes('@g.us')
+                                )
+                        )
+                        const existingGroupMap = new Map(
+                            chats
+                                .filter(
+                                    (chat) =>
+                                        typeof chat?.id === 'string' &&
+                                        chat.id.includes('@g.us')
+                                )
+                                .map((chat) => [chat.id, chat])
+                        )
+
+                        const mergedGroupChats = liveGroups.map((group) => {
+                            const existing = existingGroupMap.get(group.jid)
+                            return {
+                                id: group.jid,
+                                name: group.name,
+                                participant: group.participant,
+                                messages: Array.isArray(existing?.messages)
+                                    ? existing.messages
+                                    : [],
+                                creation: group.creation,
+                                subjectOwner: group.subjectOwner,
+                            }
+                        })
+
+                        await this.updateDb([...nonGroupChats, ...mergedGroupChats])
+                    } catch (error) {
+                        logger.debug(
+                            {
+                                instanceKey: this.key,
+                                error: error?.message || error,
+                            },
+                            'STATE: Failed to persist live groups cache'
+                        )
+                    }
+
+                    return liveGroups
+                }
+            } catch (error) {
+                logger.warn(
+                    {
+                        instanceKey: this.key,
+                        error: error?.message || error,
+                    },
+                    'STATE: Failed to fetch live groups, falling back to cached groups'
+                )
             }
-        })
+        }
+
+        const Chats = await this.getChat()
+        return mapChatsToGroupList(Chats)
     }
 
     async leaveGroup(id) {
@@ -766,9 +1348,11 @@ class WhatsAppInstance {
 
     // get Chat object from db
     async getChat(key = this.key) {
-        let dbResult = await Chat.findOne({ key: key }).exec()
-        let ChatObj = dbResult.chat
-        return ChatObj
+        const dbResult = await prisma.chat.findUnique({
+            where: { key: key },
+            select: { chat: true },
+        })
+        return Array.isArray(dbResult?.chat) ? dbResult.chat : []
     }
 
     // create new group by application
@@ -814,7 +1398,7 @@ class WhatsAppInstance {
                 let chat = Chats.find((c) => c.id === newChat.id)
                 let is_owner = false
                 if (chat) {
-                    if (chat.participant == undefined) {
+                    if (!Array.isArray(chat.participant)) {
                         chat.participant = []
                     }
                     if (chat.participant && newChat.action == 'add') {
@@ -963,9 +1547,31 @@ class WhatsAppInstance {
     // update db document -> chat
     async updateDb(object) {
         try {
-            await Chat.updateOne({ key: this.key }, { chat: object })
+            await prisma.chat.upsert({
+                where: { key: this.key },
+                update: { chat: object },
+                create: { key: this.key, chat: object },
+            })
         } catch (e) {
             logger.error('Error updating document failed')
+        }
+    }
+
+    async deleteSessionData(key = this.key) {
+        try {
+            await prisma.authState.deleteMany({
+                where: { sessionId: key },
+            })
+            await prisma.chat.deleteMany({
+                where: { key: key },
+            })
+            await prisma.session.deleteMany({
+                where: { name: key },
+            })
+            logger.info('STATE: Deleted session data')
+        } catch (e) {
+            logger.error(e)
+            logger.error('Error deleting session data failed')
         }
     }
 

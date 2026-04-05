@@ -7,6 +7,7 @@ const {
     generateRegistrationId,
 } = require('@whiskeysockets/baileys/lib/Utils/generics')
 const { randomBytes } = require('crypto')
+const { prisma } = require('./prismaClient')
 
 const initAuthCreds = () => {
     const identityKey = Curve.generateKeyPair()
@@ -57,26 +58,65 @@ const BufferJSON = {
     },
 }
 
-module.exports = useMongoDBAuthState = async (collection) => {
+module.exports = async function usePrismaAuthState(sessionName) {
+    await prisma.session.upsert({
+        where: { name: sessionName },
+        update: {},
+        create: { name: sessionName },
+    })
+
     const writeData = (data, id) => {
-        return collection.replaceOne(
-            { _id: id },
-            JSON.parse(JSON.stringify(data, BufferJSON.replacer)),
-            { upsert: true }
-        )
+        return prisma.authState.upsert({
+            where: {
+                id_sessionId: {
+                    id,
+                    sessionId: sessionName,
+                },
+            },
+            update: {
+                data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)),
+            },
+            create: {
+                id,
+                sessionId: sessionName,
+                data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)),
+            },
+        })
     }
     const readData = async (id) => {
         try {
-            const data = JSON.stringify(await collection.findOne({ _id: id }))
-            return JSON.parse(data, BufferJSON.reviver)
+            const row = await prisma.authState.findUnique({
+                where: {
+                    id_sessionId: {
+                        id,
+                        sessionId: sessionName,
+                    },
+                },
+                select: {
+                    data: true,
+                },
+            })
+            if (!row?.data) {
+                return null
+            }
+            return JSON.parse(JSON.stringify(row.data), BufferJSON.reviver)
         } catch (error) {
             return null
         }
     }
     const removeData = async (id) => {
         try {
-            await collection.deleteOne({ _id: id })
-        } catch (_a) {}
+            await prisma.authState.delete({
+                where: {
+                    id_sessionId: {
+                        id,
+                        sessionId: sessionName,
+                    },
+                },
+            })
+        } catch (_a) {
+            return null
+        }
     }
     const creds = (await readData('creds')) || (0, initAuthCreds)()
     return {
@@ -88,10 +128,10 @@ module.exports = useMongoDBAuthState = async (collection) => {
                     await Promise.all(
                         ids.map(async (id) => {
                             let value = await readData(`${type}-${id}`)
-                            if (type === 'app-state-sync-key') {
+                            if (type === 'app-state-sync-key' && value) {
                                 value =
                                     proto.Message.AppStateSyncKeyData.fromObject(
-                                        data
+                                        value
                                     )
                             }
                             data[id] = value

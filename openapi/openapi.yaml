@@ -1,0 +1,611 @@
+openapi: 3.1.0
+info:
+  title: WhatsApp API NodeJS
+  version: 1.0.0
+  description: |
+    OpenAPI specification for the REST-oriented `v1` endpoints.
+
+    Authentication note:
+    If `PROTECT_ROUTES=true`, send `Authorization: Bearer <TOKEN>`.
+servers:
+  - url: http://localhost:3333
+    description: Local development
+tags:
+  - name: Health
+  - name: Instances
+  - name: Messages
+  - name: Groups
+security:
+  - BearerAuth: []
+  - {}
+paths:
+  /status:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getStatus
+      security:
+        - BearerAuth: []
+        - {}
+      responses:
+        "200":
+          description: API is up
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+  /v1/instances:
+    post:
+      tags: [Instances]
+      summary: Create or reinitialize an instance
+      operationId: createInstance
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InstanceInitRequest"
+      responses:
+        "200":
+          description: Instance already existed and was reused/reinitialized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceInitResponse"
+        "201":
+          description: Instance created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceInitResponse"
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    get:
+      tags: [Instances]
+      summary: List instances
+      operationId: listInstances
+      parameters:
+        - in: query
+          name: active
+          required: false
+          schema:
+            type: boolean
+          description: When true, returns persisted session keys only
+      responses:
+        "200":
+          description: Instances listed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceListResponse"
+  /v1/instances/restore:
+    post:
+      tags: [Instances]
+      summary: Restore persisted sessions to memory
+      operationId: restoreInstances
+      responses:
+        "200":
+          description: Sessions restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreInstancesResponse"
+  /v1/instances/{key}:
+    get:
+      tags: [Instances]
+      summary: Get instance info
+      operationId: getInstanceByKey
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Instance fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceInfoResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      tags: [Instances]
+      summary: Delete instance and session data
+      operationId: deleteInstanceByKey
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Instance deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteInstanceResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/session:
+    delete:
+      tags: [Instances]
+      summary: Logout instance session
+      operationId: logoutInstanceSession
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Logout completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutResponse"
+        "403":
+          description: Key missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/qr:
+    get:
+      tags: [Instances]
+      summary: Get QR code as base64
+      operationId: getInstanceQrBase64
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: QR state fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QrBase64Response"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/messages:
+    post:
+      tags: [Messages]
+      summary: Send text message
+      operationId: sendTextMessage
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendTextMessageRequest"
+      responses:
+        "201":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendTextMessageResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups/{groupId}/messages:
+    post:
+      tags: [Groups, Messages]
+      summary: Send text message to a group
+      operationId: sendGroupTextMessage
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+        - $ref: "#/components/parameters/GroupIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendGroupMessageRequest"
+      responses:
+        "201":
+          description: Group message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendTextMessageResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups:
+    get:
+      tags: [Groups]
+      summary: List groups (cached or live-backed)
+      operationId: listInstanceGroups
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Groups listed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupListResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups/live:
+    get:
+      tags: [Groups]
+      summary: Fetch live groups from WhatsApp
+      operationId: getLiveGroups
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Live groups fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveGroupResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups/{groupId}:
+    delete:
+      tags: [Groups]
+      summary: Leave a group
+      operationId: leaveGroup
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+        - $ref: "#/components/parameters/GroupIdParam"
+      responses:
+        "200":
+          description: Group left
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericDataResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    KeyParam:
+      name: key
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Instance key
+    GroupIdParam:
+      name: groupId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: WhatsApp group JID (example `12345-67890@g.us`)
+  schemas:
+    ApiError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: invalid key supplied
+    GenericDataResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          description: Operation payload
+          type: object
+          additionalProperties: true
+    InstanceBrowser:
+      type: object
+      properties:
+        platform:
+          type: string
+          example: windows
+        browser:
+          type: string
+          example: Chrome
+        version:
+          type: string
+          example: 4.0.0
+    InstanceInitRequest:
+      type: object
+      properties:
+        key:
+          type: string
+          example: "123"
+        webhook:
+          type: boolean
+          default: false
+        webhookUrl:
+          type: string
+          nullable: true
+          example: https://webhook.site/uuid
+    InstanceInitResponse:
+      type: object
+      required: [error, message, key, reused, qrcode, status, browser]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Initializing successfully
+        key:
+          type: string
+          example: "123"
+        reused:
+          type: boolean
+          example: false
+        webhook:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              example: false
+            webhookUrl:
+              type: string
+              nullable: true
+        qrcode:
+          type: object
+          properties:
+            url:
+              type: string
+              example: http://localhost:3333/instance/qr?key=123
+        status:
+          type: string
+          example: connecting
+        browser:
+          $ref: "#/components/schemas/InstanceBrowser"
+    InstanceInfoData:
+      type: object
+      properties:
+        instance_key:
+          type: string
+          example: "123"
+        phone_connected:
+          type: boolean
+          example: true
+        webhookUrl:
+          type: string
+          nullable: true
+        user:
+          type: object
+          additionalProperties: true
+    InstanceInfoResponse:
+      type: object
+      required: [error, message, instance_data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Instance fetched successfully
+        instance_data:
+          $ref: "#/components/schemas/InstanceInfoData"
+    InstanceListResponse:
+      type: object
+      required: [error, message, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: All instance listed
+        data:
+          type: array
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/InstanceInfoData"
+              - type: string
+    RestoreInstancesResponse:
+      type: object
+      required: [error, message, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: All instances restored
+        data:
+          type: array
+          items:
+            type: string
+            example: "123"
+    DeleteInstanceResponse:
+      type: object
+      required: [error, message, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Instance deleted successfully
+        data:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+            - type: object
+              additionalProperties: true
+    LogoutResponse:
+      type: object
+      required: [error, message, errormsg]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: logout successfull
+        errormsg:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+    QrBase64Response:
+      type: object
+      required: [error, message, qrcode, connected, status]
+      properties:
+        error:
+          type: boolean
+        message:
+          type: string
+        qrcode:
+          type: string
+          description: Base64 QR image (Data URL)
+        connected:
+          type: boolean
+        status:
+          type: string
+          example: open
+        lastError:
+          type: string
+          nullable: true
+        lastErrorCode:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: integer
+    SendTextMessageRequest:
+      type: object
+      required: [to, message]
+      properties:
+        to:
+          type: string
+          description: Phone number with country code
+          example: "5511999999999"
+        message:
+          type: string
+          example: Hello from API
+    SendTextMessageResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          type: object
+          additionalProperties: true
+    SendGroupMessageRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: Hello group
+    GroupSummary:
+      type: object
+      properties:
+        index:
+          type: integer
+          example: 0
+        name:
+          type: string
+          example: Team Group
+        jid:
+          type: string
+          example: 12345-67890@g.us
+        participant:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        creation:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: integer
+        subjectOwner:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+    GroupListResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupSummary"
+    LiveGroupResponse:
+      type: object
+      required: [error, message, instance_data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Instance fetched successfully
+        instance_data:
+          type: object
+          additionalProperties: true

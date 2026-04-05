@@ -6,17 +6,92 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WhatsApp QrCode</title>
     <style>
-        div {
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 24px;
+        }
+        .container {
             display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
+            gap: 16px;
+            min-height: 70vh;
+        }
+        #qrcode_box {
+            max-width: 360px;
+            width: 100%;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            background: #fff;
+        }
+        .status {
+            color: #444;
+            font-size: 14px;
+            text-align: center;
+            max-width: 560px;
         }
     </style>
 </head>
 <body>
-    <h1> Scan Code Below Using WhatsApp App<h1>
-            <div class="container">
-                <img src="<%= qrcode %>" alt="" id="qrcode_box" />
-            </div>
+    <h1>Scan Code Below Using WhatsApp App</h1>
+    <div class="container">
+        <img src="<%= qrcode %>" alt="QR Code" id="qrcode_box" />
+        <p id="status" class="status">
+            <% if (lastError) { %>
+                Falha ao gerar QR Code: <%= lastError %> [<%= status || 'idle' %>]
+            <% } else if (phoneConnected) { %>
+                Instancia ja conectada.
+            <% } else if (qrcode) { %>
+                QR Code gerado. Escaneie com o WhatsApp.
+            <% } else { %>
+                Aguardando geracao do QR Code...
+            <% } %>
+        </p>
+    </div>
+    <script>
+        (function () {
+            const key = <%- JSON.stringify(key || '') %>
+            const img = document.getElementById('qrcode_box')
+            const status = document.getElementById('status')
+            let stopped = false
+
+            async function refreshQr() {
+                if (stopped || !key) return
+
+                try {
+                    const response = await fetch(
+                        '/instance/qrbase64?key=' + encodeURIComponent(key)
+                    )
+                    const data = await response.json()
+
+                    if (data && typeof data.qrcode === 'string' && data.qrcode.trim()) {
+                        img.src = data.qrcode
+                        status.textContent = 'QR Code gerado. Escaneie com o WhatsApp.'
+                        return
+                    }
+
+                    if (data && data.connected) {
+                        status.textContent = data.message || 'Instancia ja conectada.'
+                        stopped = true
+                        return
+                    }
+
+                    const connectionStatus = data && data.status ? ' [' + data.status + ']' : ''
+                    status.textContent = (
+                        (data && data.message) ||
+                        'Aguardando geracao do QR Code...'
+                    ) + connectionStatus
+                } catch (_error) {
+                    status.textContent =
+                        'Falha ao atualizar QR Code. Atualize a pagina.'
+                }
+            }
+
+            setInterval(refreshQr, 2500)
+            refreshQr()
+        })()
+    </script>
 </body>
 </html>

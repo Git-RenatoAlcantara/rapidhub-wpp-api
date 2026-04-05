@@ -6,8 +6,11 @@ const loginVerify = require('../middlewares/loginCheck')
 const router = express.Router()
 
 router.route('/create').post(keyVerify, loginVerify, controller.create)
-router.route('/listall').get(keyVerify, loginVerify, controller.listAll)
-router.route('/leave').get(keyVerify, loginVerify, controller.leaveGroup)
+router.route('/listall').get(keyVerify, controller.listAll)
+router
+    .route('/leave')
+    .get(keyVerify, loginVerify, controller.leaveGroup)
+    .delete(keyVerify, loginVerify, controller.leaveGroup)
 
 router
     .route('/inviteuser')
@@ -24,7 +27,7 @@ router
     .get(keyVerify, loginVerify, controller.getInstanceInviteCodeGroup)
 router
     .route('/getallgroups')
-    .get(keyVerify, loginVerify, controller.getAllGroups)
+    .get(keyVerify, controller.getAllGroups)
 router
     .route('/participantsupdate')
     .post(keyVerify, loginVerify, controller.groupParticipantsUpdate)

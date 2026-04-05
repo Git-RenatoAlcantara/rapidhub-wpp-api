@@ -64,8 +64,7 @@ An implementation of [Baileys](https://github.com/WhiskeySockets/Baileys) as a s
 2. Update `.env` and set
 
 ```
-MONGODB_ENABLED=true
-MONGODB_URL=mongodb://mongodb:27017/whatsapp_api
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/whatsapp_api?schema=public
 ```
 
 3. Set your `TOKEN=` to a random string.
@@ -123,20 +122,34 @@ Set a comma seperated list of events you want to get notified about.
 
 Default value is `all` which will forward all events.
 
-Allowed values:
+Recommended `.env` setting:
 
--   `connection` - receive all connection events
--   `connection:open` - receive open connection events
--   `connection:close` - receive close connection events
--   `presense` - receive presence events
--   `messages` - receive all messages event
--   `call` - receive all events related to calls
+```env
+WEBHOOK_ALLOWED_EVENTS=all
+```
+
+Do not leave `WEBHOOK_ALLOWED_EVENTS` empty, otherwise webhook events may be filtered out.
+
+Allowed values (exact):
+
+-   `all` - receive all supported webhook events
+-   `connection` - receive connection events (`open` and `close`)
+-   `connection.update` - receive connection update events
+-   `connection:open` - receive connection open events
+-   `connection:close` - receive connection close events
+-   `presence` - receive presence events
+-   `presence.update` - receive presence update events
+-   `messages` - receive incoming message events
+-   `messages.upsert` - receive message upsert events
+-   `call` - receive all call-related events
+-   `CB:call` - receive raw Baileys call event bucket used by call offers
+-   `call:offer` - receive incoming call offer events
 -   `call:terminate` - receive call terminate events
--   `call:offer` - receive call terminate event
--   `groups` - receive all events related to groups
--   `group_participants` - receive all events related to group participants
-
-You can also use the Baileys event format example: `messages.upsert`
+-   `groups` - receive all group-related events
+-   `groups.upsert` - receive group creation events
+-   `groups.update` - receive group update events
+-   `group_participants` - receive group participant change events
+-   `group-participants.update` - receive group participant update events
 
 ## Generate custom instance with custom key and custom webhook.
 
@@ -193,6 +206,27 @@ curl --location --request POST 'localhost:3333/message/text?key=INSTANCE_KEY_HER
 | Miscellaneous Routes | [misc.route.js](https://github.com/salman0ansari/whatsapp-api-nodejs/blob/main/src/api/routes/misc.route.js)         |
 
 See all routes here [src/api/routes](https://github.com/salman0ansari/whatsapp-api-nodejs/tree/main/src/api/routes)
+
+## REST v1 Endpoints
+
+In addition to the legacy RPC-style routes, this project now exposes a REST-oriented `v1` surface:
+
+- `POST /v1/instances`
+- `GET /v1/instances`
+- `GET /v1/instances/:key`
+- `DELETE /v1/instances/:key`
+- `DELETE /v1/instances/:key/session`
+- `GET /v1/instances/:key/qr`
+- `POST /v1/instances/:key/messages` (body: `{ "to": "5511999999999", "message": "Hello" }`)
+- `POST /v1/instances/:key/groups/:groupId/messages` (body: `{ "message": "Hello group" }`)
+- `GET /v1/instances/:key/groups`
+- `GET /v1/instances/:key/groups/live`
+- `DELETE /v1/instances/:key/groups/:groupId`
+
+## API Documentation (OpenAPI)
+
+- OpenAPI spec file: `GET /openapi.yaml`
+- Swagger UI: `GET /docs`
 
 # Note
 
