@@ -1961,7 +1961,7 @@ levn@^0.4.1:
 
 "libsignal@git+https://github.com/whiskeysockets/libsignal-node.git":
   version "2.0.1"
-  resolved "git+ssh://git@github.com/whiskeysockets/libsignal-node.git"
+  resolved "git+https://github.com/whiskeysockets/libsignal-node.git#1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67"
   integrity sha512-OoptN1yDyDSFNvpDHFpiNt5KOu9ePBaRbBQwt9py4yyUs85ey+jTgbdHjR/mAqFF5EOXhBdEM1CBeCzK77nEBg==
   dependencies:
     curve25519-js "^0.0.4"
