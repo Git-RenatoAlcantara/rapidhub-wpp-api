@@ -1,12 +1,13 @@
-/* eslint-disable no-unsafe-optional-chaining */
-const { WhatsAppInstance } = require('../class/instance')
-const logger = require('pino')()
-const config = require('../../config/config')
-const { prisma } = require('../helper/prismaClient')
+import { WhatsAppInstance } from './instance.js'
+import { pino } from 'pino'
+import config from '../../config/config.js'
+import { prisma } from '../helper/prismaClient.js'
 
-class Session {
-    async restoreSessions() {
-        let restoredSessions = new Array()
+const logger = pino()
+
+export class Session {
+    async restoreSessions(): Promise<string[]> {
+        const restoredSessions: string[] = []
         try {
             const sessions = await prisma.session.findMany({
                 select: { name: true },
@@ -25,10 +26,8 @@ class Session {
             }
         } catch (e) {
             logger.error('Error restoring sessions')
-            logger.error(e)
+            logger.error(e as any)
         }
         return restoredSessions
     }
 }
-
-exports.Session = Session

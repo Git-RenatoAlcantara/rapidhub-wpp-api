@@ -1,16 +1,19 @@
-const { WhatsAppInstance } = require('../class/instance')
-const config = require('../../config/config')
-const { Session } = require('../class/session')
-const { prisma } = require('../helper/prismaClient')
-const sleep = require('../helper/sleep')
-const logger = require('pino')()
+import { Request, Response, NextFunction } from 'express'
+import { WhatsAppInstance } from '../class/instance.js'
+import config from '../../config/config.js'
+import { Session } from '../class/session.js'
+import { prisma } from '../helper/prismaClient.js'
+import sleep from '../helper/sleep.js'
+import { pino } from 'pino'
 
-function isInstanceActive(instance) {
+const logger = pino()
+
+function isInstanceActive(instance: any): boolean {
     const status = instance?.instance?.connectionStatus
     return ['connecting', 'open', 'qr', 'reconnecting'].includes(status)
 }
 
-function parseBoolean(value, defaultValue = false) {
+function parseBoolean(value: any, defaultValue = false): boolean {
     if (typeof value === 'boolean') return value
     if (typeof value === 'undefined' || value === null) return defaultValue
     const normalized = String(value).trim().toLowerCase()
@@ -19,7 +22,7 @@ function parseBoolean(value, defaultValue = false) {
     return defaultValue
 }
 
-async function waitForQr(instance, timeoutMs = 15000, intervalMs = 300) {
+async function waitForQr(instance: any, timeoutMs = 15000, intervalMs = 300): Promise<string> {
     const startedAt = Date.now()
     while (Date.now() - startedAt < timeoutMs) {
         const qrcode = instance?.instance?.qr
@@ -31,7 +34,7 @@ async function waitForQr(instance, timeoutMs = 15000, intervalMs = 300) {
     return instance?.instance?.qr || ''
 }
 
-function buildQrFailureMessage(lastConnectionError, lastConnectionErrorCode) {
+function buildQrFailureMessage(lastConnectionError: string, lastConnectionErrorCode: number | null): string {
     if (lastConnectionErrorCode === 408) {
         if (
             typeof lastConnectionError === 'string' &&
@@ -53,10 +56,10 @@ function buildQrFailureMessage(lastConnectionError, lastConnectionErrorCode) {
     return `Falha ao gerar QR Code: ${lastConnectionError}`
 }
 
-exports.init = async (req, res) => {
-    const keySource = req.query.key ?? req.body?.key
-    const webhookSource = req.query.webhook ?? req.body?.webhook
-    const webhookUrlSource = req.query.webhookUrl ?? req.body?.webhookUrl
+export const init = async (req: Request, res: Response) => {
+    const keySource = (req.query.key ?? req.body?.key) as string | undefined
+    const webhookSource = (req.query.webhook ?? req.body?.webhook) as string | undefined
+    const webhookUrlSource = (req.query.webhookUrl ?? req.body?.webhookUrl) as string | undefined
     const key = keySource ? keySource.toString().trim() : ''
     const webhook = parseBoolean(webhookSource, false)
     const webhookUrl = !webhookUrlSource ? null : webhookUrlSource.toString()
@@ -77,7 +80,7 @@ exports.init = async (req, res) => {
             qrcode: {
                 url: appUrl + '/instance/qr?key=' + existingInstance.key,
             },
-            status: existingInstance.instance?.connectionStatus || 'idle',
+            status: (existingInstance as any).instance?.connectionStatus || 'idle',
             browser: config.browser,
         })
     }
@@ -100,20 +103,20 @@ exports.init = async (req, res) => {
         qrcode: {
             url: appUrl + '/instance/qr?key=' + data.key,
         },
-        status: instance.instance?.connectionStatus || 'idle',
+        status: (instance as any).instance?.connectionStatus || 'idle',
         browser: config.browser,
     })
 }
 
-exports.qr = async (req, res) => {
+export const qr = async (req: Request, res: Response) => {
     try {
-        const instance = WhatsAppInstances[req.query.key]
+        const instance = WhatsAppInstances[req.query.key as string]
         const qrcode = await waitForQr(instance, 5000, 250)
-        const phoneConnected = !!instance?.instance?.online
-        const connectionStatus = instance?.instance?.connectionStatus || 'idle'
-        const lastConnectionError = instance?.instance?.lastConnectionError || ''
+        const phoneConnected = !!(instance as any)?.instance?.online
+        const connectionStatus = (instance as any)?.instance?.connectionStatus || 'idle'
+        const lastConnectionError = (instance as any)?.instance?.lastConnectionError || ''
         const lastConnectionErrorCode =
-            instance?.instance?.lastDisconnectCode || null
+            (instance as any)?.instance?.lastDisconnectCode || null
         res.render('qrcode', {
             qrcode: qrcode,
             key: req.query.key,
@@ -123,7 +126,7 @@ exports.qr = async (req, res) => {
             lastErrorCode: lastConnectionErrorCode,
         })
     } catch (error) {
-        logger.error(error)
+        logger.error(error as any)
         res.json({
             error: true,
             message: 'Failed to render QR page',
@@ -132,16 +135,16 @@ exports.qr = async (req, res) => {
     }
 }
 
-exports.qrbase64 = async (req, res) => {
+export const qrbase64 = async (req: Request, res: Response) => {
     try {
-        const instance = WhatsAppInstances[req.query.key]
+        const instance = WhatsAppInstances[req.query.key as string]
         const qrcode = await waitForQr(instance)
         const hasQr = typeof qrcode === 'string' && qrcode.trim().length > 0
-        const phoneConnected = !!instance?.instance?.online
-        const connectionStatus = instance?.instance?.connectionStatus || 'idle'
-        const lastConnectionError = instance?.instance?.lastConnectionError || ''
+        const phoneConnected = !!(instance as any)?.instance?.online
+        const connectionStatus = (instance as any)?.instance?.connectionStatus || 'idle'
+        const lastConnectionError = (instance as any)?.instance?.lastConnectionError || ''
         const lastConnectionErrorCode =
-            instance?.instance?.lastDisconnectCode || null
+            (instance as any)?.instance?.lastDisconnectCode || null
 
         if (!hasQr && phoneConnected) {
             return res.json({
@@ -181,7 +184,7 @@ exports.qrbase64 = async (req, res) => {
             lastError: '',
             lastErrorCode: null,
         })
-    } catch (error) {
+    } catch (error: any) {
         logger.error(error)
         res.json({
             error: true,
@@ -195,11 +198,11 @@ exports.qrbase64 = async (req, res) => {
     }
 }
 
-exports.info = async (req, res) => {
-    const instance = WhatsAppInstances[req.query.key]
+export const info = async (req: Request, res: Response) => {
+    const instance = WhatsAppInstances[req.query.key as string]
     let data
     try {
-        data = await instance.getInstanceDetail(req.query.key)
+        data = await instance.getInstanceDetail(req.query.key as string)
     } catch (error) {
         data = {}
     }
@@ -210,10 +213,10 @@ exports.info = async (req, res) => {
     })
 }
 
-exports.restore = async (req, res, next) => {
+export const restore = async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const session = new Session()
-        let restoredSessions = await session.restoreSessions()
+        const restoredSessions = await session.restoreSessions()
         return res.json({
             error: false,
             message: 'All instances restored',
@@ -224,8 +227,8 @@ exports.restore = async (req, res, next) => {
     }
 }
 
-exports.logout = async (req, res) => {
-    let errormsg
+export const logout = async (req: Request, res: Response) => {
+    let errormsg: any
     const key = req.query.key?.toString()
 
     if (!key) {
@@ -264,11 +267,11 @@ exports.logout = async (req, res) => {
     })
 }
 
-exports.delete = async (req, res) => {
-    let errormsg
+export const deleteInstance = async (req: Request, res: Response) => {
+    let errormsg: any
     try {
-        await WhatsAppInstances[req.query.key].deleteInstance(req.query.key)
-        delete WhatsAppInstances[req.query.key]
+        await WhatsAppInstances[req.query.key as string].deleteInstance(req.query.key as string)
+        delete WhatsAppInstances[req.query.key as string]
     } catch (error) {
         errormsg = error
     }
@@ -279,7 +282,7 @@ exports.delete = async (req, res) => {
     })
 }
 
-exports.list = async (req, res) => {
+export const list = async (req: Request, res: Response) => {
     if (req.query.active) {
         const sessions = await prisma.session.findMany({
             select: { name: true },
@@ -293,10 +296,10 @@ exports.list = async (req, res) => {
         })
     }
 
-    let instance = Object.keys(WhatsAppInstances).map(async (key) =>
+    const instance = Object.keys(WhatsAppInstances).map(async (key) =>
         WhatsAppInstances[key].getInstanceDetail(key)
     )
-    let data = await Promise.all(instance)
+    const data = await Promise.all(instance)
 
     return res.json({
         error: false,
@@ -304,3 +307,5 @@ exports.list = async (req, res) => {
         data: data,
     })
 }
+
+export { deleteInstance as delete }

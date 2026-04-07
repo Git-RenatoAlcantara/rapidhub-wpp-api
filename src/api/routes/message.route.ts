@@ -1,12 +1,12 @@
-const express = require('express')
-const controller = require('../controllers/message.controller')
-const keyVerify = require('../middlewares/keyCheck')
-const loginVerify = require('../middlewares/loginCheck')
-const multer = require('multer')
+import express from 'express'
+import * as controller from '../controllers/message.controller.js'
+import keyVerify from '../middlewares/keyCheck.js'
+import loginVerify from '../middlewares/loginCheck.js'
+import multer from 'multer'
 
 const router = express.Router()
 const storage = multer.memoryStorage()
-const upload = multer({ storage: storage, inMemory: true }).single('file')
+const upload = multer({ storage: storage }).single('file')
 
 router.route('/text').post(keyVerify, loginVerify, controller.Text)
 router.route('/image').post(keyVerify, loginVerify, upload, controller.Image)
@@ -21,7 +21,7 @@ router.route('/setstatus').put(keyVerify, loginVerify, controller.SetStatus)
 router
     .route('/mediabutton')
     .post(keyVerify, loginVerify, controller.MediaButton)
-router.route("/read").post(keyVerify, loginVerify, controller.Read)
-router.route("/react").post(keyVerify, loginVerify, controller.React)
+router.route('/read').post(keyVerify, loginVerify, controller.Read)
+router.route('/react').post(keyVerify, loginVerify, controller.React)
 
-module.exports = router
+export default router

@@ -1,7 +1,7 @@
-const express = require('express')
-const controller = require('../controllers/misc.controller')
-const keyVerify = require('../middlewares/keyCheck')
-const loginVerify = require('../middlewares/loginCheck')
+import express from 'express'
+import * as controller from '../controllers/misc.controller.js'
+import keyVerify from '../middlewares/keyCheck.js'
+import loginVerify from '../middlewares/loginCheck.js'
 
 const router = express.Router()
 
@@ -15,4 +15,5 @@ router
 router
     .route('/getuserorgroupbyid')
     .get(keyVerify, loginVerify, controller.getUserOrGroupById)
-module.exports = router
+
+export default router

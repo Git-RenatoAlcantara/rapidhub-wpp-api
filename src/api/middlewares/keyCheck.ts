@@ -1,11 +1,14 @@
-const { WhatsAppInstance } = require('../class/instance')
-const config = require('../../config/config')
-const { prisma } = require('../helper/prismaClient')
-const logger = require('pino')({ level: config.log.level })
+import { Request, Response, NextFunction } from 'express'
+import { WhatsAppInstance } from '../class/instance.js'
+import config from '../../config/config.js'
+import { prisma } from '../helper/prismaClient.js'
+import { pino } from 'pino'
 
-const restoringInstances = new Map()
+const logger = pino({ level: config.log.level })
 
-async function restoreInstanceIfPersisted(key) {
+const restoringInstances = new Map<string, Promise<WhatsAppInstance | null>>()
+
+async function restoreInstanceIfPersisted(key: string): Promise<WhatsAppInstance | null> {
     if (WhatsAppInstances[key]) return WhatsAppInstances[key]
 
     if (restoringInstances.has(key)) {
@@ -36,7 +39,7 @@ async function restoreInstanceIfPersisted(key) {
     }
 }
 
-async function keyVerification(req, res, next) {
+async function keyVerification(req: Request, res: Response, next: NextFunction) {
     const key = req.query['key']?.toString().trim()
     if (!key) {
         return res
@@ -47,8 +50,8 @@ async function keyVerification(req, res, next) {
     let instance = WhatsAppInstances[key]
     if (!instance) {
         try {
-            instance = await restoreInstanceIfPersisted(key)
-        } catch (error) {
+            instance = (await restoreInstanceIfPersisted(key)) as any
+        } catch (error: any) {
             logger.error(
                 {
                     key,
@@ -71,4 +74,4 @@ async function keyVerification(req, res, next) {
     next()
 }
 
-module.exports = keyVerification
+export default keyVerification

@@ -1,5 +1,9 @@
-const express = require('express')
-const path = require('path')
+import express from 'express'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const router = express.Router()
 const openApiPath = path.join(__dirname, '../../../openapi/openapi.yaml')
@@ -52,4 +56,4 @@ router.get('/docs', (_req, res) => {
 </html>`)
 })
 
-module.exports = router
+export default router

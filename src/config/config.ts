@@ -10,7 +10,7 @@ const RESTORE_SESSIONS_ON_START_UP = !!(
     process.env.RESTORE_SESSIONS_ON_START_UP === 'true'
 )
 
-const APP_URL = process.env.APP_URL || false
+const APP_URL: string | false = process.env.APP_URL || false
 
 const ALLOWED_LOG_LEVELS = new Set([
     'fatal',
@@ -28,13 +28,13 @@ const LOG_LEVEL = ALLOWED_LOG_LEVELS.has(ENV_LOG_LEVEL)
 
 const INSTANCE_MAX_RETRY_QR = process.env.INSTANCE_MAX_RETRY_QR || 2
 
-const sanitizeEnvText = (value, fallback) => {
+const sanitizeEnvText = (value: string | undefined, fallback: string): string => {
     const raw = value ?? fallback
     if (typeof raw !== 'string') return fallback
     return raw.trim().replace(/^['"]|['"]$/g, '') || fallback
 }
 
-const parseWebhookAllowedEvents = (value) => {
+const parseWebhookAllowedEvents = (value: string | undefined): string[] => {
     if (typeof value !== 'string') return ['all']
     const events = value
         .split(',')
@@ -70,7 +70,7 @@ const MARK_MESSAGES_READ = !!(
     process.env.MARK_MESSAGES_READ && process.env.MARK_MESSAGES_READ === 'true'
 )
 
-module.exports = {
+const config = {
     port: PORT,
     token: TOKEN,
     restoreSessionsOnStartup: RESTORE_SESSIONS_ON_START_UP,
@@ -94,5 +94,7 @@ module.exports = {
     webhookBase64: WEBHOOK_BASE64,
     protectRoutes: PROTECT_ROUTES,
     markMessagesRead: MARK_MESSAGES_READ,
-    webhookAllowedEvents: WEBHOOK_ALLOWED_EVENTS
+    webhookAllowedEvents: WEBHOOK_ALLOWED_EVENTS,
 }
+
+export default config

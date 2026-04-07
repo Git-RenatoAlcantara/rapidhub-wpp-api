@@ -1,4 +1,6 @@
-function loginVerification(req, res, next) {
+import { Request, Response, NextFunction } from 'express'
+
+function loginVerification(req: Request, res: Response, next: NextFunction) {
     const key = req.query['key']?.toString()
     if (!key) {
         return res
@@ -6,7 +8,7 @@ function loginVerification(req, res, next) {
             .send({ error: true, message: 'no key query was present' })
     }
     const instance = WhatsAppInstances[key]
-    if (!instance.instance?.online) {
+    if (!(instance as any).instance?.online) {
         return res
             .status(401)
             .send({ error: true, message: "phone isn't connected" })
@@ -14,4 +16,4 @@ function loginVerification(req, res, next) {
     next()
 }
 
-module.exports = loginVerification
+export default loginVerification

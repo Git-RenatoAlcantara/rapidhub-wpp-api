@@ -1,13 +1,11 @@
-const { proto } = require('@whiskeysockets/baileys/WAProto')
-const {
+import {
+    proto,
     Curve,
     signedKeyPair,
-} = require('@whiskeysockets/baileys/lib/Utils/crypto')
-const {
     generateRegistrationId,
-} = require('@whiskeysockets/baileys/lib/Utils/generics')
-const { randomBytes } = require('crypto')
-const { prisma } = require('./prismaClient')
+} from '@whiskeysockets/baileys'
+import { randomBytes } from 'crypto'
+import { prisma } from './prismaClient.js'
 
 const initAuthCreds = () => {
     const identityKey = Curve.generateKeyPair()
@@ -17,7 +15,7 @@ const initAuthCreds = () => {
         signedPreKey: signedKeyPair(identityKey, 1),
         registrationId: generateRegistrationId(),
         advSecretKey: randomBytes(32).toString('base64'),
-        processedHistoryMessages: [],
+        processedHistoryMessages: [] as any[],
         nextPreKeyId: 1,
         firstUnuploadedPreKeyId: 1,
         accountSettings: {
@@ -27,7 +25,7 @@ const initAuthCreds = () => {
 }
 
 const BufferJSON = {
-    replacer: (k, value) => {
+    replacer: (_k: string, value: any) => {
         if (
             Buffer.isBuffer(value) ||
             value instanceof Uint8Array ||
@@ -42,7 +40,7 @@ const BufferJSON = {
         return value
     },
 
-    reviver: (_, value) => {
+    reviver: (_: string, value: any) => {
         if (
             typeof value === 'object' &&
             !!value &&
@@ -58,14 +56,14 @@ const BufferJSON = {
     },
 }
 
-module.exports = async function usePrismaAuthState(sessionName) {
+export default async function usePrismaAuthState(sessionName: string) {
     await prisma.session.upsert({
         where: { name: sessionName },
         update: {},
         create: { name: sessionName },
     })
 
-    const writeData = (data, id) => {
+    const writeData = (data: any, id: string) => {
         return prisma.authState.upsert({
             where: {
                 id_sessionId: {
@@ -83,7 +81,7 @@ module.exports = async function usePrismaAuthState(sessionName) {
             },
         })
     }
-    const readData = async (id) => {
+    const readData = async (id: string) => {
         try {
             const row = await prisma.authState.findUnique({
                 where: {
@@ -104,7 +102,7 @@ module.exports = async function usePrismaAuthState(sessionName) {
             return null
         }
     }
-    const removeData = async (id) => {
+    const removeData = async (id: string) => {
         try {
             await prisma.authState.delete({
                 where: {
@@ -118,13 +116,13 @@ module.exports = async function usePrismaAuthState(sessionName) {
             return null
         }
     }
-    const creds = (await readData('creds')) || (0, initAuthCreds)()
+    const creds = (await readData('creds')) || initAuthCreds()
     return {
         state: {
             creds,
             keys: {
-                get: async (type, ids) => {
-                    const data = {}
+                get: async (type: string, ids: string[]) => {
+                    const data: Record<string, any> = {}
                     await Promise.all(
                         ids.map(async (id) => {
                             let value = await readData(`${type}-${id}`)
@@ -139,8 +137,8 @@ module.exports = async function usePrismaAuthState(sessionName) {
                     )
                     return data
                 },
-                set: async (data) => {
-                    const tasks = []
+                set: async (data: Record<string, Record<string, any>>) => {
+                    const tasks: Promise<any>[] = []
                     for (const category of Object.keys(data)) {
                         for (const id of Object.keys(data[category])) {
                             const value = data[category][id]

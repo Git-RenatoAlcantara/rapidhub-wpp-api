@@ -1,6 +1,7 @@
-const config = require('../../config/config')
+import { Request, Response, NextFunction } from 'express'
+import config from '../../config/config.js'
 
-function tokenVerification(req, res, next) {
+function tokenVerification(req: Request, res: Response, next: NextFunction) {
     const bearer = req.headers.authorization
     const token = bearer?.slice(7)?.toString()
     if (!token) {
@@ -18,4 +19,4 @@ function tokenVerification(req, res, next) {
     next()
 }
 
-module.exports = tokenVerification
+export default tokenVerification

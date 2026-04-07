@@ -1,14 +1,16 @@
-const dotenv = require('dotenv')
-const logger = require('pino')()
+import dotenv from 'dotenv'
+import { pino } from 'pino'
 dotenv.config()
 
-const app = require('./config/express')
-const config = require('./config/config')
+import app from './config/express.js'
+import config from './config/config.js'
 
-const { Session } = require('./api/class/session')
-const { prisma, connectPrisma } = require('./api/helper/prismaClient')
+import { Session } from './api/class/session.js'
+import { prisma, connectPrisma } from './api/helper/prismaClient.js'
 
-let server
+const logger = pino()
+
+let server: ReturnType<typeof app.listen>
 
 server = app.listen(config.port, async () => {
     logger.info(`Listening on port ${config.port}`)
@@ -16,7 +18,7 @@ server = app.listen(config.port, async () => {
     if (config.restoreSessionsOnStartup) {
         logger.info(`Restoring Sessions`)
         const session = new Session()
-        let restoreSessions = await session.restoreSessions()
+        const restoreSessions = await session.restoreSessions()
         logger.info(`${restoreSessions.length} Session(s) Restored`)
     }
 })
@@ -33,7 +35,7 @@ const exitHandler = () => {
     }
 }
 
-const unexpectedErrorHandler = (error) => {
+const unexpectedErrorHandler = (error: Error) => {
     logger.error(error)
     exitHandler()
 }
@@ -48,4 +50,4 @@ process.on('SIGTERM', () => {
     }
 })
 
-module.exports = server
+export default server

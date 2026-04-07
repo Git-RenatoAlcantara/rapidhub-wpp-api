@@ -1,7 +1,7 @@
-const express = require('express')
-const controller = require('../controllers/group.controller')
-const keyVerify = require('../middlewares/keyCheck')
-const loginVerify = require('../middlewares/loginCheck')
+import express from 'express'
+import * as controller from '../controllers/group.controller.js'
+import keyVerify from '../middlewares/keyCheck.js'
+import loginVerify from '../middlewares/loginCheck.js'
 
 const router = express.Router()
 
@@ -44,4 +44,5 @@ router
     .route('/inviteinfo')
     .post(keyVerify, loginVerify, controller.groupInviteInfo)
 router.route('/groupjoin').post(keyVerify, loginVerify, controller.groupJoin)
-module.exports = router
+
+export default router

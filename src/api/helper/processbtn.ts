@@ -1,5 +1,17 @@
-module.exports = function processButton(buttons) {
-    const preparedButtons = []
+interface ButtonInput {
+    type: string
+    title?: string
+    payload?: string
+}
+
+interface PreparedButton {
+    quickReplyButton?: { displayText: string }
+    callButton?: { displayText: string; phoneNumber: string }
+    urlButton?: { displayText: string; url: string }
+}
+
+export default function processButton(buttons: ButtonInput[]): PreparedButton[] {
+    const preparedButtons: PreparedButton[] = []
 
     buttons.map((button) => {
         if (button.type == 'replyButton') {

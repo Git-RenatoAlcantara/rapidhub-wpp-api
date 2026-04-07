@@ -1,18 +1,20 @@
-const { PrismaClient } = require('@prisma/client')
-const logger = require('pino')()
+import { PrismaClient } from '@prisma/client'
+import { pino } from 'pino'
+
+const logger = pino()
 
 if (!process.env.DATABASE_URL) {
     process.env.DATABASE_URL =
         'postgresql://postgres:postgres@localhost:5432/whatsapp_api?schema=public'
 }
 
-const prisma = new PrismaClient()
+export const prisma = new PrismaClient()
 
-async function connectPrisma() {
+export async function connectPrisma(): Promise<void> {
     try {
         await prisma.$connect()
         logger.info('STATE: Successfully connected to Database via Prisma')
-    } catch (error) {
+    } catch (error: any) {
         logger.error(
             {
                 error: {
@@ -26,5 +28,3 @@ async function connectPrisma() {
         process.exit(1)
     }
 }
-
-module.exports = { prisma, connectPrisma }

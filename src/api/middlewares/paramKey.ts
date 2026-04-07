@@ -1,5 +1,7 @@
-function bindParamToQuery(paramName = 'key', queryName = 'key') {
-    return (req, _res, next) => {
+import { Request, Response, NextFunction } from 'express'
+
+export function bindParamToQuery(paramName = 'key', queryName = 'key') {
+    return (req: Request, _res: Response, next: NextFunction) => {
         const queryKey = req.query?.[queryName]
         const paramValue = req.params?.[paramName]
 
@@ -8,14 +10,9 @@ function bindParamToQuery(paramName = 'key', queryName = 'key') {
             typeof paramValue !== 'undefined' &&
             paramValue !== null
         ) {
-            req.query[queryName] = String(paramValue)
+            ;(req.query as any)[queryName] = String(paramValue)
         }
 
         next()
     }
 }
-
-module.exports = {
-    bindParamToQuery,
-}
-

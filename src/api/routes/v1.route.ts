@@ -1,10 +1,10 @@
-const express = require('express')
-const instanceController = require('../controllers/instance.controller')
-const messageController = require('../controllers/message.controller')
-const groupController = require('../controllers/group.controller')
-const keyVerify = require('../middlewares/keyCheck')
-const loginVerify = require('../middlewares/loginCheck')
-const { bindParamToQuery } = require('../middlewares/paramKey')
+import express, { Request, Response, NextFunction } from 'express'
+import * as instanceController from '../controllers/instance.controller.js'
+import * as messageController from '../controllers/message.controller.js'
+import * as groupController from '../controllers/group.controller.js'
+import keyVerify from '../middlewares/keyCheck.js'
+import loginVerify from '../middlewares/loginCheck.js'
+import { bindParamToQuery } from '../middlewares/paramKey.js'
 
 const router = express.Router()
 
@@ -17,7 +17,7 @@ router.route('/instances/restore').post(instanceController.restore)
 router
     .route('/instances/:key')
     .get(bindKeyParam, keyVerify, instanceController.info)
-    .delete(bindKeyParam, keyVerify, instanceController.delete)
+    .delete(bindKeyParam, keyVerify, instanceController.deleteInstance)
 
 router
     .route('/instances/:key/session')
@@ -33,7 +33,7 @@ router
         bindKeyParam,
         keyVerify,
         loginVerify,
-        (req, _res, next) => {
+        (req: Request, _res: Response, next: NextFunction) => {
             if (!req.body?.id && req.body?.to) {
                 req.body.id = req.body.to
             }
@@ -49,7 +49,7 @@ router
         bindGroupParam,
         keyVerify,
         loginVerify,
-        (req, _res, next) => {
+        (req: Request, _res: Response, next: NextFunction) => {
             req.body = req.body || {}
             if (!req.body.id) {
                 req.body.id = req.query.id
@@ -77,4 +77,4 @@ router
         groupController.leaveGroup
     )
 
-module.exports = router
+export default router

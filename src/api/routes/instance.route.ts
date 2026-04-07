@@ -1,6 +1,6 @@
-const express = require('express')
-const controller = require('../controllers/instance.controller')
-const keyVerify = require('../middlewares/keyCheck')
+import express from 'express'
+import * as controller from '../controllers/instance.controller.js'
+import keyVerify from '../middlewares/keyCheck.js'
 
 const router = express.Router()
 router.route('/init').get(controller.init).post(controller.init)
@@ -10,7 +10,7 @@ router.route('/info').get(keyVerify, controller.info)
 router.route('/restore').get(controller.restore).post(controller.restore)
 router.route('/logout').get(controller.logout).post(controller.logout)
 router.route('/logout').delete(controller.logout)
-router.route('/delete').delete(keyVerify, controller.delete)
+router.route('/delete').delete(keyVerify, controller.deleteInstance)
 router.route('/list').get(controller.list)
 
-module.exports = router
+export default router
