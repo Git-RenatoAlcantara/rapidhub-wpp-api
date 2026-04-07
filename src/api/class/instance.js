@@ -265,6 +265,15 @@ class WhatsAppInstance {
                 : Browsers.appropriate(browserName),
         }
 
+        socketConfig.getMessage = async (key) => {
+            const msg = this.instance.messages.find(
+                (m) =>
+                    m.key.id === key.id &&
+                    m.key.remoteJid === key.remoteJid
+            )
+            return msg?.message || { conversation: '' }
+        }
+
         try {
             const latest = await fetchLatestBaileysVersion()
             if (latest?.version && !latest?.error) {
@@ -718,6 +727,45 @@ class WhatsAppInstance {
                     ].includes(messageType)
                 )
                     return
+
+                // Log da mensagem recebida
+                if (!msg.key.fromMe) {
+                    const sender = msg.key.remoteJid
+                    let textContent = ''
+                    if (messageType === 'conversation') {
+                        textContent = msg.message.conversation
+                    } else if (messageType === 'extendedTextMessage') {
+                        textContent = msg.message.extendedTextMessage?.text
+                    } else if (messageType === 'imageMessage') {
+                        textContent = msg.message.imageMessage?.caption || '[imagem]'
+                    } else if (messageType === 'videoMessage') {
+                        textContent = msg.message.videoMessage?.caption || '[vídeo]'
+                    } else if (messageType === 'audioMessage') {
+                        textContent = '[áudio]'
+                    } else if (messageType === 'documentMessage') {
+                        textContent = `[documento: ${msg.message.documentMessage?.fileName || ''}]`
+                    } else if (messageType === 'stickerMessage') {
+                        textContent = '[sticker]'
+                    } else {
+                        textContent = `[${messageType}]`
+                    }
+                    const isGroup = sender?.endsWith('@g.us')
+                    const participant = msg.key.participant || msg.participant
+                    if (isGroup) {
+                        console.log(`\n👥 [MENSAGEM DE GRUPO]`)
+                        console.log(`   Instância : ${this.key}`)
+                        console.log(`   Grupo     : ${sender}`)
+                        console.log(`   Remetente : ${participant || 'desconhecido'}`)
+                    } else {
+                        console.log(`\n📩 [MENSAGEM RECEBIDA]`)
+                        console.log(`   Instância : ${this.key}`)
+                        console.log(`   De        : ${sender}`)
+                    }
+                    console.log(`   Tipo      : ${messageType}`)
+                    console.log(`   Conteúdo  : ${textContent}`)
+                    console.log(`   ID        : ${msg.key.id}`)
+                    console.log(`   Hora      : ${new Date().toLocaleString('pt-BR')}\n`)
+                }
 
                 const webhookData = {
                     key: this.key,
