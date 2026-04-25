@@ -24,6 +24,22 @@ function normalizeWebhookUrl(value) {
     return normalized.length > 0 ? normalized : null
 }
 
+function hasBinaryNodeTag(node, tag) {
+    if (!node || typeof node !== 'object') return false
+    if (node.tag === tag) return true
+    if (!Array.isArray(node.content)) return false
+
+    return node.content.some((child) => hasBinaryNodeTag(child, tag))
+}
+
+function getStreamErrorReason(payload) {
+    return (
+        payload?.reasonNode?.tag ||
+        payload?.fullErrorNode?.content?.find?.((child) => child?.tag)?.tag ||
+        ''
+    )
+}
+
 function createBaileysLogger() {
     return pino({
         level: config.log.level,
@@ -42,6 +58,10 @@ function createBaileysLogger() {
                     message === 'stream errored out' &&
                     String(payload?.fullErrorNode?.attrs?.code || '') ===
                         String(DisconnectReason.restartRequired)
+
+                const isAckStreamError =
+                    message === 'stream errored out' &&
+                    getStreamErrorReason(payload) === 'ack'
 
                 const isPreKeyUploadTimeout =
                     message ===
@@ -62,6 +82,7 @@ function createBaileysLogger() {
                     level >= 50 &&
                     (
                         isRestartRequiredStreamError ||
+                        isAckStreamError ||
                         isPreKeyUploadTimeout ||
                         isMissingSessionDecrypt
                     )
@@ -329,7 +350,45 @@ class WhatsAppInstance {
             return
         }
 
+        if (
+            disconnectCode === DisconnectReason.badSession &&
+            String(disconnectMessage || '')
+                .toLowerCase()
+                .includes('stream errored (ack)')
+        ) {
+            this.instance.lastConnectionError =
+                'Stream Errored (ack). Reconectando automaticamente sem apagar a sessao.'
+            return
+        }
+
         this.instance.lastConnectionError = disconnectMessage
+    }
+
+    isAckStreamError(disconnectCode, disconnectMessage, lastDisconnect) {
+        if (disconnectCode !== DisconnectReason.badSession) return false
+
+        if (
+            String(disconnectMessage || '')
+                .toLowerCase()
+                .includes('stream errored (ack)')
+        )
+            return true
+
+        const errorData = lastDisconnect?.error?.data
+        return hasBinaryNodeTag(errorData, 'ack')
+    }
+
+    isTransientDisconnect(disconnectCode, disconnectMessage, lastDisconnect) {
+        return (
+            disconnectCode === DisconnectReason.restartRequired ||
+            disconnectCode === DisconnectReason.timedOut ||
+            disconnectCode === 408 ||
+            this.isAckStreamError(
+                disconnectCode,
+                disconnectMessage,
+                lastDisconnect
+            )
+        )
     }
 
     isTerminalDisconnectCode(disconnectCode) {
@@ -466,10 +525,11 @@ class WhatsAppInstance {
 
                 this.setDisconnectState(disconnectCode, disconnectMessage)
 
-                const isExpectedTransientClose =
-                    disconnectCode === DisconnectReason.restartRequired ||
-                    disconnectCode === DisconnectReason.timedOut ||
-                    disconnectCode === 408
+                const isExpectedTransientClose = this.isTransientDisconnect(
+                    disconnectCode,
+                    disconnectMessage,
+                    lastDisconnect
+                )
 
                 logger[isExpectedTransientClose ? 'warn' : 'error'](
                     {
@@ -492,6 +552,8 @@ class WhatsAppInstance {
                         },
                         'STATE: Manual logout close event received'
                     )
+                } else if (isExpectedTransientClose) {
+                    await this.reconnectInstance(disconnectCode)
                 } else if (this.isTerminalDisconnectCode(disconnectCode)) {
                     await this.deleteSessionData(this.key)
                 } else if (disconnectCode === 405) {
