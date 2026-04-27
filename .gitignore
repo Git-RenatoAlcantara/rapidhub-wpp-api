@@ -12,4 +12,7 @@ dist
 .vscode/settings.json
 .idea
 
+# Binaries
+*.exe
+
 /src/generated/prisma

@@ -2,5 +2,5 @@
     "watch": ["src", ".env"],
     "ignore": [],
     "ext": "ts",
-    "exec": "tsx src/server.ts"
+    "exec": "npx tsx src/server.ts"
 }

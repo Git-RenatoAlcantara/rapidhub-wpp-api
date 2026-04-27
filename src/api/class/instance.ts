@@ -216,6 +216,7 @@ export class WhatsAppInstance {
         this.instance.online = false
         this.instance.qr = ''
         this.instance.qrRetry = 0
+        this.instance.reconnectAttempts = 0
         this.instance.sock = makeWASocket(socketConfig)
         this.socketGeneration += 1
         this.setHandler(this.socketGeneration)
@@ -519,6 +520,18 @@ export class WhatsAppInstance {
                                 'Create a new session key and try again later. This is usually an upstream WhatsApp registration rejection.',
                         },
                         'STATE: Stopping reconnect due to upstream connection failure'
+                    )
+                } else if (
+                    disconnectCode === DisconnectReason.timedOut &&
+                    disconnectMessage === 'QR refs attempts ended'
+                ) {
+                    this.instance.connectionStatus = 'idle'
+                    logger.warn(
+                        {
+                            instanceKey: this.key,
+                            disconnectCode,
+                        },
+                        'STATE: QR scan timed out. Instance is idle, call /init to generate a new QR.'
                     )
                 } else {
                     await this.reconnectInstance(disconnectCode)
