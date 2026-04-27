@@ -7,6 +7,8 @@ const __dirname = path.dirname(__filename)
 
 const router = express.Router()
 const openApiPath = path.join(__dirname, '../../../openapi/openapi.yaml')
+const llmsTxtPath = path.join(__dirname, '../../../llms.txt')
+const llmsFullTxtPath = path.join(__dirname, '../../../llms-full.txt')
 
 router.get('/openapi.yaml', (_req, res) => {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
@@ -15,6 +17,16 @@ router.get('/openapi.yaml', (_req, res) => {
     res.set('Surrogate-Control', 'no-store')
     res.type('application/yaml')
     res.sendFile(openApiPath)
+})
+
+router.get('/llms.txt', (_req, res) => {
+    res.type('text/plain; charset=utf-8')
+    res.sendFile(llmsTxtPath)
+})
+
+router.get('/llms-full.txt', (_req, res) => {
+    res.type('text/plain; charset=utf-8')
+    res.sendFile(llmsFullTxtPath)
 })
 
 router.get('/docs', (_req, res) => {

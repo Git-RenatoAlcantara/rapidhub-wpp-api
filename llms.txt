@@ -1,0 +1,87 @@
+# rapidhub-wpp-api
+
+> REST API over [Baileys](https://github.com/WhiskeySockets/Baileys) (WhatsApp Web Multi-Device) for managing multiple WhatsApp instances via HTTP. Each instance maps to one phone, persists its session in PostgreSQL, exposes endpoints for sending messages and managing groups, and emits webhook events for incoming traffic.
+
+The API is HTTP/JSON. Each WhatsApp connection is identified by a string `key` (UUID by default). Pairing happens by scanning a QR code returned as a base64 PNG. There are two parallel surfaces: a legacy RPC-style surface (`/instance/*`, `/message/*`, `/group/*`, `/misc/*`) and a newer REST surface under `/v1/*`. Prefer `/v1/*` for new integrations.
+
+Authentication is optional. When `PROTECT_ROUTES=true`, every request must carry `Authorization: Bearer <TOKEN>`. Otherwise the API is open and only the `key` query parameter gates access to a specific instance.
+
+The default base URL during local development is `http://localhost:3333`. Replace it with the public host when calling a deployed instance.
+
+## API reference
+
+- [OpenAPI 3.1 spec (YAML)](/openapi.yaml): Full machine-readable description of the `/v1/*` surface — paths, schemas, examples. Fetch this first; it is the source of truth for request/response shapes.
+- [Swagger UI](/docs): Interactive HTML viewer of the same spec for human-friendly browsing.
+- [Health check](/status): `GET` returning the literal string `OK`. Use to verify the service is up.
+
+## Core endpoints (v1)
+
+- [POST /v1/instances](/v1/instances): Create or reinitialize an instance. Body `{ "key"?, "webhook"?, "webhookUrl"? }`. Response includes the `key` and a URL to the QR page. Returns `200` if the key already existed, `201` if newly created.
+- [GET /v1/instances](/v1/instances): List all in-memory instances. `?active=true` returns only persisted session keys.
+- [POST /v1/instances/restore](/v1/instances/restore): Reload all persisted sessions from the database into memory.
+- [GET /v1/instances/{key}](/v1/instances/{key}): Get connection state for one instance (`phone_connected`, `webhookUrl`, `user`).
+- [DELETE /v1/instances/{key}](/v1/instances/{key}): Delete the session permanently (purges DB rows).
+- [DELETE /v1/instances/{key}/session](/v1/instances/{key}/session): Logout the instance (frees the key for re-pairing).
+- [GET /v1/instances/{key}/qr](/v1/instances/{key}/qr): Get the pairing QR code as a base64 data URL plus connection status. Poll until `connected: true`.
+- [POST /v1/instances/{key}/messages](/v1/instances/{key}/messages): Send a text message. Body `{ "to": "5511999999999", "message": "Hello" }` (the field `id` is also accepted as an alias for `to`).
+- [POST /v1/instances/{key}/groups/{groupId}/messages](/v1/instances/{key}/groups/{groupId}/messages): Send a text message to a group. Body `{ "message": "..." }`.
+- [GET /v1/instances/{key}/groups](/v1/instances/{key}/groups): List groups from the local cache.
+- [GET /v1/instances/{key}/groups/live](/v1/instances/{key}/groups/live): Force a live fetch from WhatsApp.
+- [DELETE /v1/instances/{key}/groups/{groupId}](/v1/instances/{key}/groups/{groupId}): Leave a group.
+
+## Legacy endpoints
+
+- [GET /instance/init](/instance/init): RPC-style instance creation. Query: `key`, `webhook`, `webhookUrl`. Equivalent to `POST /v1/instances`.
+- [GET /instance/qrbase64](/instance/qrbase64): Returns `{ qrcode, connected, status, lastError }` — same payload as the v1 QR endpoint.
+- [GET /instance/qr](/instance/qr): Renders an HTML page with the QR image (intended for browsers, not agents).
+- [POST /message/text](/message/text): Send text. Query: `key`. Body: `{ id, message }`.
+- [POST /message/image](/message/image), [POST /message/video](/message/video), [POST /message/audio](/message/audio), [POST /message/doc](/message/doc): Send media via `multipart/form-data` with field `file`. Body fields: `id`, `caption?`, `filename?`.
+- [POST /message/mediaurl](/message/mediaurl): Send media by URL. Body: `{ id, url, type, mimetype, caption? }`.
+- [POST /message/button](/message/button), [POST /message/list](/message/list), [POST /message/contact](/message/contact), [POST /message/mediabutton](/message/mediabutton), [POST /message/react](/message/react), [POST /message/read](/message/read): See OpenAPI for body shapes.
+- [PUT /message/setstatus](/message/setstatus): Send presence. Body: `{ id, status }` where status is one of `unavailable`, `available`, `composing`, `recording`, `paused`.
+- Group routes (`/group/create`, `/group/listall`, `/group/leave`, `/group/inviteuser`, `/group/makeadmin`, `/group/demoteadmin`, `/group/getinvitecode`, `/group/groupjoin`, etc.): All require `?key=`. Most require the phone to be connected.
+- Misc routes (`/misc/onwhatsapp`, `/misc/downProfile`, `/misc/getStatus`, `/misc/blockUser`, `/misc/updateProfilePicture`, `/misc/getuserorgroupbyid`): Lookup and profile utilities.
+
+## Conventions
+
+- All responses are JSON with shape `{ "error": boolean, "message"?: string, "data"?: ... }`. The HTTP status code is the primary signal; `error: false` mirrors a 2xx.
+- Recipient identifiers (`id`/`to`) accept raw phone numbers in international format (`5511999999999`), full JIDs (`5511999999999@s.whatsapp.net`), or group JIDs (`<id>@g.us`). The server normalizes them.
+- A request to a route that requires a connected phone returns `401 { error: true, message: "phone isn't connected" }` if the instance is in `idle`, `connecting`, `qr`, or `close` state.
+- Connection states surfaced by the QR/info endpoints: `idle`, `connecting`, `qr`, `open`, `close`, `reconnecting`, `logging_out`.
+
+## Webhooks
+
+- Configure a webhook per instance via `webhookUrl` in `POST /v1/instances`, or globally via `WEBHOOK_URL` + `WEBHOOK_ENABLED=true`.
+- The server `POST`s `{ "type": "<event>", "body": {...}, "instanceKey": "<key>" }` to the configured URL with a 10s timeout.
+- Filter events with `WEBHOOK_ALLOWED_EVENTS` (CSV, default `all`). Supported names: `all`, `connection`, `connection.update`, `connection:open`, `connection:close`, `presence`, `presence.update`, `messages`, `messages.upsert`, `call`, `CB:call`, `call:offer`, `call:terminate`, `groups`, `groups.upsert`, `groups.update`, `group_participants`, `group-participants.update`.
+- Set `WEBHOOK_BASE64=true` to receive media payloads inline as base64 in `body.msgContent`.
+
+## Quick start (curl)
+
+```bash
+# 1. Create an instance (returns a key)
+curl -X POST http://localhost:3333/v1/instances \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+
+# 2. Poll the QR until "connected": true (scan with the WhatsApp app)
+curl http://localhost:3333/v1/instances/<KEY>/qr
+
+# 3. Send a text message
+curl -X POST http://localhost:3333/v1/instances/<KEY>/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"to":"5511999999999","message":"Hello from the API"}'
+
+# 4. List groups
+curl http://localhost:3333/v1/instances/<KEY>/groups
+
+# 5. Logout (keeps key reusable) or delete (purges session)
+curl -X DELETE http://localhost:3333/v1/instances/<KEY>/session
+curl -X DELETE http://localhost:3333/v1/instances/<KEY>
+```
+
+## Optional
+
+- [README](/README.md): Project README with installation, Docker Compose setup, and the full Postman collection link.
+- [Postman collection](https://documenter.getpostman.com/view/12514774/UVsPQkBq): Hosted collection covering the legacy endpoints.
+- [Baileys documentation](https://github.com/WhiskeySockets/Baileys): Underlying library reference — useful when interpreting raw event payloads delivered via webhooks.

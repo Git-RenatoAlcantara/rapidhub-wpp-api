@@ -1,0 +1,1037 @@
+# rapidhub-wpp-api — Full reference for AI agents
+
+> REST API over [Baileys](https://github.com/WhiskeySockets/Baileys) (WhatsApp Web Multi-Device) for managing multiple WhatsApp instances via HTTP. Each instance maps to one phone, persists its session in PostgreSQL, exposes endpoints for sending messages and managing groups, and emits webhook events for incoming traffic.
+
+This file inlines everything an agent needs to operate the API without follow-up fetches: endpoints, request/response shapes, conventions, webhook contract, configuration, and the full OpenAPI 3.1 spec. For a shorter index version, see `/llms.txt`.
+
+---
+
+## Table of contents
+
+1. Overview & mental model
+2. Authentication
+3. Identifiers (JIDs) and base URL
+4. Connection lifecycle
+5. Endpoint reference (v1 + legacy)
+6. Response envelopes
+7. Webhook contract
+8. Configuration (environment variables)
+9. Quick start (curl)
+10. Error catalogue
+11. Full OpenAPI 3.1 spec
+
+---
+
+## 1. Overview & mental model
+
+- One **instance** = one WhatsApp phone connection. It is identified by a string `key` (UUID by default; you can supply your own).
+- An instance is created with `POST /v1/instances`. The first call generates a QR code; the user scans it with the WhatsApp app to link the device.
+- Once paired, the instance is **online** and accepts message-sending requests. Auth state is persisted in PostgreSQL, so the instance survives restarts (set `RESTORE_SESSIONS_ON_START_UP=true` to auto-reload at boot).
+- Two parallel route surfaces exist:
+  - **`/v1/*`** — REST-shaped, JSON bodies, path params. Preferred for new clients.
+  - **`/instance|/message|/group|/misc`** — legacy RPC-style, query strings, mostly the same controllers underneath.
+- Incoming messages, presence updates, calls and group changes are pushed to a **webhook URL** (per-instance or global).
+- Storage: PostgreSQL via Prisma. Tables: `Session`, `AuthState`, `Chat`.
+- Hot state lives in the Node process (`global.WhatsAppInstances`). The API is **single-process**: do not run behind a load balancer with multiple replicas without sticky routing — different replicas would each see a partial view.
+
+## 2. Authentication
+
+- **Bearer token (optional, global)**: when `PROTECT_ROUTES=true` is set in the environment, every request must include `Authorization: Bearer <TOKEN>` where `TOKEN` matches the `TOKEN` env. Otherwise the endpoints are open.
+- **Instance key (per-instance)**: every endpoint that operates on a specific instance requires `?key=<instanceKey>` in the query string (or `:key` in the path on `/v1/*` routes — the server copies it into the query for you). Missing keys return `403 { error: true, message: "no key query was present" }`. Invalid (unknown and not persisted) keys return `403 { error: true, message: "invalid key supplied" }`.
+- **Phone-online gate**: routes that depend on the WhatsApp socket (sending messages, group operations) reject with `401 { error: true, message: "phone isn't connected" }` when the instance is not in state `open`.
+
+## 3. Identifiers (JIDs) and base URL
+
+- Default base URL during local development: `http://localhost:3333`. Replace with the public host in production.
+- Recipient identifiers (`id`, `to`) accept any of:
+  - International phone number, digits only: `5511999999999`
+  - Full user JID: `5511999999999@s.whatsapp.net`
+  - Group JID: `<id>@g.us` (group JIDs always contain `-`; for example `120363012345678901@g.us`)
+- The server normalizes them with this rule: contains `@g.us` or `@s.whatsapp.net` → use as-is; contains `-` → group; otherwise → user JID.
+
+## 4. Connection lifecycle
+
+`status` field returned by the QR/info endpoints transitions through:
+
+- `idle` — instance object exists but the socket is not yet started
+- `connecting` — socket handshake in progress
+- `qr` — pairing QR available, waiting for scan
+- `open` — paired and ready to send
+- `close` — socket closed (will auto-reconnect unless terminal)
+- `reconnecting` — backoff retry in progress
+- `logging_out` — manual `DELETE /session` in flight
+
+Auto-reconnect uses linear backoff (`baseWait * attempts`, up to 15 s, capped at 10 attempts). It is **not** attempted for terminal codes: `loggedOut`, `badSession`, `multideviceMismatch`, `forbidden`, or `405` (upstream rejection — create a new key).
+
+## 5. Endpoint reference
+
+Common conventions:
+- All `v1` routes accept the instance key as a path parameter; the server copies it to `req.query.key`.
+- Legacy routes always use `?key=<key>` in the query string.
+- All bodies are JSON (`Content-Type: application/json`) unless noted (`/message/image|video|audio|doc` are `multipart/form-data`).
+
+### 5.1 Health & docs
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/status` | Liveness check; returns plain text `OK`. |
+| GET | `/openapi.yaml` | Machine-readable OpenAPI 3.1 spec. |
+| GET | `/docs` | Swagger UI for human browsing. |
+| GET | `/llms.txt` | Index for AI agents. |
+| GET | `/llms-full.txt` | This document. |
+
+### 5.2 Instances (REST `v1`)
+
+#### `POST /v1/instances` — Create or reinitialize
+
+Request body (all optional):
+```json
+{
+  "key": "my-custom-key",
+  "webhook": true,
+  "webhookUrl": "https://example.com/webhook"
+}
+```
+- `key` — if omitted, a UUID v4 is generated.
+- `webhook` — boolean; when true, this instance emits webhooks (also requires either `webhookUrl` or the global `WEBHOOK_URL`).
+- `webhookUrl` — overrides the global URL for this instance.
+
+Response (`200` if reused, `201` if newly created):
+```json
+{
+  "error": false,
+  "message": "Initializing successfully",
+  "key": "my-custom-key",
+  "reused": false,
+  "webhook": { "enabled": true, "webhookUrl": "https://example.com/webhook" },
+  "qrcode": { "url": "http://localhost:3333/instance/qr?key=my-custom-key" },
+  "status": "connecting",
+  "browser": { "platform": "windows", "browser": "Chrome", "version": "4.0.0" }
+}
+```
+
+#### `GET /v1/instances` — List
+
+- `?active=true` — returns the array of persisted session names (strings only).
+- No query — returns full instance details for everything currently in memory.
+
+```json
+{
+  "error": false,
+  "message": "All instance listed",
+  "data": [
+    { "instance_key": "abc", "phone_connected": true, "webhookUrl": "...", "user": {} }
+  ]
+}
+```
+
+#### `POST /v1/instances/restore`
+
+Reloads every persisted session from the database into memory. Returns the list of restored keys.
+
+#### `GET /v1/instances/{key}`
+
+```json
+{
+  "error": false,
+  "message": "Instance fetched successfully",
+  "instance_data": {
+    "instance_key": "abc",
+    "phone_connected": true,
+    "webhookUrl": "https://example.com/webhook",
+    "user": { "id": "5511999999999@s.whatsapp.net", "name": "Renato" }
+  }
+}
+```
+
+#### `DELETE /v1/instances/{key}` — Permanent delete
+
+Tears down the socket, removes DB rows (`Session`, cascaded `AuthState`). The key becomes invalid until re-init.
+
+#### `DELETE /v1/instances/{key}/session` — Logout
+
+Calls `sock.logout()`, tears down the socket, deletes session data. The key remains usable for a fresh `POST /v1/instances` (which will issue a new QR).
+
+#### `GET /v1/instances/{key}/qr`
+
+Returns the QR as a base64 data URL plus connection state. Poll this until either `connected: true` or `lastError` is set.
+
+```json
+{
+  "error": false,
+  "message": "QR Base64 fetched successfully",
+  "qrcode": "data:image/png;base64,iVBORw0KGgoAAAANS...",
+  "connected": false,
+  "status": "qr",
+  "lastError": "",
+  "lastErrorCode": null
+}
+```
+
+When the phone is already connected:
+```json
+{ "error": true, "message": "Instancia ja conectada. Faca logout para gerar um novo QR Code.", "qrcode": "", "connected": true, "status": "open", "lastError": "" }
+```
+
+When pairing failed with a known code, `lastErrorCode` will be one of:
+- `408` — pre-key timeout / QR scan timed out
+- `405` — WhatsApp rejected this device registration (use a fresh key)
+- `515` — restart required
+
+#### `POST /v1/instances/{key}/messages` — Send text
+
+Body:
+```json
+{ "to": "5511999999999", "message": "Hello from API" }
+```
+- `id` is accepted as an alias for `to` (legacy controller compatibility).
+
+Response `201`:
+```json
+{ "error": false, "data": { "key": { "id": "3EB0...", "remoteJid": "5511999999999@s.whatsapp.net", "fromMe": true }, "messageTimestamp": 1700000000 } }
+```
+
+#### `POST /v1/instances/{key}/groups/{groupId}/messages`
+
+Body: `{ "message": "Hello group" }`. `groupId` is the group JID (URL-encoded).
+
+#### `GET /v1/instances/{key}/groups`
+
+Returns groups from the local cache, plus a live fetch when the phone is online:
+```json
+{
+  "error": false,
+  "data": [
+    { "index": 0, "name": "Team", "jid": "12345-67890@g.us", "participant": [], "creation": 1700000000, "subjectOwner": "5511999999999@s.whatsapp.net" }
+  ]
+}
+```
+
+#### `GET /v1/instances/{key}/groups/live`
+
+Forces a `groupFetchAllParticipating` call to WhatsApp. Returns the raw map keyed by group JID under `instance_data`.
+
+#### `DELETE /v1/instances/{key}/groups/{groupId}`
+
+Leaves the group (`sock.groupLeave`).
+
+### 5.3 Instances (legacy)
+
+| Method(s) | Path | Notes |
+| --- | --- | --- |
+| GET, POST | `/instance/init` | Same as `POST /v1/instances`. Query: `key`, `webhook`, `webhookUrl`. |
+| GET | `/instance/qr` | Renders an HTML page with the QR (for browsers, not agents). |
+| GET | `/instance/qrbase64` | Same payload as `GET /v1/instances/{key}/qr`. |
+| GET | `/instance/info` | Same payload as `GET /v1/instances/{key}`. |
+| GET, POST | `/instance/restore` | Same as `POST /v1/instances/restore`. |
+| GET, POST, DELETE | `/instance/logout` | Same as `DELETE /v1/instances/{key}/session`. |
+| DELETE | `/instance/delete` | Same as `DELETE /v1/instances/{key}`. |
+| GET | `/instance/list` | Same as `GET /v1/instances`. Supports `?active=true`. |
+
+### 5.4 Messages (legacy)
+
+All `POST` and require `?key=`. Bodies are JSON unless marked.
+
+| Path | Body | Description |
+| --- | --- | --- |
+| `/message/text` | `{ id, message }` | Plain text. |
+| `/message/image` | `multipart/form-data`: `file`, `id`, `caption?` | Image upload. |
+| `/message/video` | `multipart/form-data`: `file`, `id`, `caption?` | Video upload. |
+| `/message/audio` | `multipart/form-data`: `file`, `id` | Audio (sent as PTT/voice note). |
+| `/message/doc` | `multipart/form-data`: `file`, `id`, `filename?` | Document. |
+| `/message/mediaurl` | `{ id, url, type, mimetype, caption? }` | Media by URL. `type` is `image`/`video`/`audio`/`document`. |
+| `/message/button` | `{ id, btndata: { text, footerText?, buttons: [...] } }` | Template buttons. |
+| `/message/list` | `{ id, msgdata: { text, sections, buttonText, description, title } }` | Interactive list. |
+| `/message/contact` | `{ id, vcard: { fullName, organization?, phoneNumber, ... } }` | Contact card. |
+| `/message/mediabutton` | `{ id, btndata: { mediaType, image, mimeType, text, footerText?, buttons } }` | Template buttons with media header. |
+| `/message/react` | `{ id, key, emoji }` | React to a message. `key` is the WhatsApp message key object. |
+| `/message/read` | `{ msg }` | Mark messages as read. `msg` is an array of `{ remoteJid, id, participant? }`. |
+| `PUT /message/setstatus` | `{ id, status }` | Send presence. `status` ∈ `unavailable`, `available`, `composing`, `recording`, `paused`. |
+
+All return `201 { error: false, data: <Baileys send result> }`.
+
+### 5.5 Groups (legacy)
+
+| Method | Path | Body / Query |
+| --- | --- | --- |
+| POST | `/group/create` | `{ name, users: [...] }` |
+| GET | `/group/listall` | — |
+| GET, DELETE | `/group/leave` | `?id=<groupJid>` |
+| POST | `/group/inviteuser` | `{ id, users: [...] }` |
+| POST | `/group/makeadmin` | `{ id, users: [...] }` |
+| POST | `/group/demoteadmin` | `{ id, users: [...] }` |
+| GET | `/group/getinvitecode` | `?id=<groupJid>` → `{ error, link: "https://chat.whatsapp.com/<code>" }` |
+| GET | `/group/getinstanceinvitecode` | `?id=<groupJid>` |
+| GET | `/group/getallgroups` | Live fetch from WhatsApp. |
+| POST | `/group/participantsupdate` | `{ id, users, action }` where `action` ∈ `add`/`remove`/`promote`/`demote`. |
+| POST | `/group/settingsupdate` | `{ id, action }` where `action` ∈ `announcement`/`not_announcement`/`locked`/`unlocked`. |
+| POST | `/group/updatesubject` | `{ id, subject }` |
+| POST | `/group/updatedescription` | `{ id, description }` |
+| POST | `/group/inviteinfo` | `{ code }` |
+| POST | `/group/groupjoin` | `{ code }` |
+
+### 5.6 Misc (legacy)
+
+| Method | Path | Query / Body |
+| --- | --- | --- |
+| GET | `/misc/onwhatsapp` | `?id=<phone>` — checks if the number is on WhatsApp. |
+| GET | `/misc/downProfile` | `?id=<phoneOrJid>` — returns the profile picture URL. |
+| GET | `/misc/getStatus` | `?id=<phoneOrJid>` — fetches the user's "about" status. |
+| GET | `/misc/blockUser` | `?id=<phone>&block_status=block|unblock` |
+| POST | `/misc/updateProfilePicture` | `{ id, url }` |
+| GET | `/misc/getuserorgroupbyid` | `?id=<idOrJid>` |
+
+## 6. Response envelopes
+
+All endpoints return JSON with a consistent envelope:
+
+```json
+{ "error": false, "message": "...", "data": ... }
+```
+
+- `error` is always present; mirrors the HTTP status (a 2xx pairs with `error: false`).
+- Many endpoints replace `data` with a domain-specific field (`instance_data`, `link`, `qrcode`, `errormsg`, etc.) — see schemas above and the OpenAPI section below.
+
+Standard error shapes:
+```json
+{ "error": true, "message": "no key query was present" }    // 403
+{ "error": true, "message": "invalid key supplied" }        // 403
+{ "error": true, "message": "phone isn't connected" }       // 401
+{ "error": true, "message": "no bearer token header was present" }      // 403, only when PROTECT_ROUTES=true
+{ "error": true, "message": "invalid bearer token supplied" }           // 403, only when PROTECT_ROUTES=true
+```
+
+## 7. Webhook contract
+
+When configured, the server `POST`s to your URL with this payload:
+
+```json
+{
+  "type": "<event-name>",
+  "body": { ... },
+  "instanceKey": "<the instance key>"
+}
+```
+
+- Timeout: 10 s. Failures are logged and swallowed (no retry).
+- Headers: standard `Content-Type: application/json` from axios.
+- Configure per-instance via `webhookUrl` in `POST /v1/instances`, or globally via env (`WEBHOOK_ENABLED=true` + `WEBHOOK_URL=...`).
+- Filter event types via `WEBHOOK_ALLOWED_EVENTS` (CSV, default `all`). **Never set this to empty** — that filters everything out.
+
+Event types and their `body` contents:
+
+| `type` | When | `body` shape |
+| --- | --- | --- |
+| `connection` | Connection state changes. Trigger names: `connection`, `connection.update`, `connection:open`, `connection:close`. | `{ "connection": "open" \| "close" \| "connecting" }` |
+| `presence` | Trigger names: `presence`, `presence.update`. | Raw Baileys presence event. |
+| `message` | Trigger names: `messages`, `messages.upsert`. Only for `m.type === "notify"`. | The Baileys message object plus `key` (instance key). When `WEBHOOK_BASE64=true`, also `msgContent` (base64 of the media). |
+| `call_offer` | Incoming call. Trigger names: `call`, `CB:call`, `call:offer`. | `{ id, timestamp, user: { id, platform, platform_version } }` |
+| `call_terminate` | Call ended. Trigger names: `call`, `call:terminate`. | `{ id, user: { id }, timestamp, reason }` |
+| `group_created` | New group. Trigger names: `groups`, `groups.upsert`. | `{ data: <baileys payload> }` |
+| `group_updated` | Group metadata change. Trigger names: `groups`, `groups.update`. | `{ data: <baileys payload> }` |
+| `group_participants_updated` | Participant add/remove/promote/demote. Trigger names: `groups`, `group_participants`, `group-participants.update`. | `{ data: <baileys payload> }` |
+
+Recommended `WEBHOOK_ALLOWED_EVENTS` for typical message-handling agents:
+```
+WEBHOOK_ALLOWED_EVENTS=messages.upsert,connection,group_participants
+```
+
+## 8. Configuration (environment variables)
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3333` | HTTP port. |
+| `TOKEN` | empty | Bearer token validated when `PROTECT_ROUTES=true`. |
+| `PROTECT_ROUTES` | `false` | Enable global bearer-token middleware. |
+| `RESTORE_SESSIONS_ON_START_UP` | `false` | Reload persisted sessions at boot. |
+| `APP_URL` | empty (uses request host) | Base URL embedded in QR-code response. |
+| `LOG_LEVEL` | `info` | Pino level: `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent`. |
+| `INSTANCE_MAX_RETRY_QR` | `2` | Maximum QR retries before giving up. |
+| `CLIENT_PLATFORM` | `windows` | Browser profile used by Baileys: `windows`/`linux`/`ubuntu`/`macos`/`darwin`/`baileys`. |
+| `CLIENT_BROWSER` | `Chrome` | Browser name shown in WhatsApp linked devices. |
+| `CLIENT_VERSION` | `4.0.0` | Browser version string. |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/whatsapp_api?schema=public` | PostgreSQL connection string for Prisma. |
+| `WEBHOOK_ENABLED` | `false` | Enable webhooks globally for every instance. |
+| `WEBHOOK_URL` | empty | Default webhook URL when an instance does not specify one. |
+| `WEBHOOK_BASE64` | `false` | Include media as base64 in `msgContent`. |
+| `WEBHOOK_ALLOWED_EVENTS` | `all` | CSV filter of event names. |
+| `MARK_MESSAGES_READ` | `false` | Auto-mark inbound messages as read. |
+
+## 9. Quick start (curl)
+
+```bash
+# 1. Create an instance — the server returns a key
+curl -X POST http://localhost:3333/v1/instances \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+
+# Optional: create with a known key and per-instance webhook
+curl -X POST http://localhost:3333/v1/instances \
+  -H 'Content-Type: application/json' \
+  -d '{"key":"my-bot","webhook":true,"webhookUrl":"https://example.com/wh"}'
+
+# 2. Poll the QR endpoint until connected:true
+curl http://localhost:3333/v1/instances/my-bot/qr
+# Response includes "qrcode": "data:image/png;base64,..."
+# Display this image to the user; they scan it with the WhatsApp app.
+
+# 3. Send a text message
+curl -X POST http://localhost:3333/v1/instances/my-bot/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"to":"5511999999999","message":"Hello from the API"}'
+
+# 4. Send a message to a group (groupId is the JID, URL-encoded)
+curl -X POST 'http://localhost:3333/v1/instances/my-bot/groups/12345-67890%40g.us/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Hi everyone"}'
+
+# 5. List groups (live)
+curl http://localhost:3333/v1/instances/my-bot/groups/live
+
+# 6. Logout (key reusable) or delete (purge session)
+curl -X DELETE http://localhost:3333/v1/instances/my-bot/session
+curl -X DELETE http://localhost:3333/v1/instances/my-bot
+```
+
+With `PROTECT_ROUTES=true`, every request needs:
+```
+-H 'Authorization: Bearer <TOKEN>'
+```
+
+## 10. Error catalogue
+
+| Status | Body | Cause / fix |
+| --- | --- | --- |
+| `401` | `{ "error": true, "message": "phone isn't connected" }` | Instance is not in `open` state. Wait for pairing or re-init. |
+| `403` | `{ "error": true, "message": "no key query was present" }` | The route requires `?key=` (or `:key` in path on `/v1/*`). |
+| `403` | `{ "error": true, "message": "invalid key supplied" }` | Unknown key, no persisted session matches. |
+| `403` | `{ "error": true, "message": "no bearer token header was present" }` | `PROTECT_ROUTES=true` is on; provide `Authorization: Bearer <TOKEN>`. |
+| `403` | `{ "error": true, "message": "invalid bearer token supplied" }` | Token mismatch with `TOKEN` env. |
+| `404` | `{ "error": true, "message": "invalid key supplied" }` | Logout target does not exist in memory or DB. |
+| `500` | `{ "error": true, "message": "failed to initialize key supplied" }` | Restoration from persisted session failed; check server logs. |
+| Domain | `{ "error": true, "message": "Unable to update profile picture" }` | Returned in the body with HTTP 2xx for soft failures (group ops, profile picture). Check `error` boolean, not the status. |
+| Domain | `Error: no account exists` | Thrown when `verifyId` finds the recipient is not on WhatsApp. Surface as a 5xx via the global error handler unless caught upstream. |
+
+QR-specific failure messages embedded in the QR response (`message` field, Portuguese):
+- `"QR Code expirou antes do escaneamento. Gere um novo QR e escaneie imediatamente."` — code `408`, scan timed out.
+- `"Connection Failure (405): WhatsApp rejeitou o registro deste dispositivo no momento. Tente novamente com uma nova chave."` — code `405`, upstream rejection. **Use a new key.**
+- `"Conexao do WhatsApp reiniciando (515). Aguarde alguns segundos e tente novamente."` — code `515`, restart required (auto-reconnect handles it).
+- `"Timeout de pre-key durante inicializacao. A API vai tentar reconectar automaticamente."` — pre-key upload timeout.
+
+## 11. Full OpenAPI 3.1 spec
+
+The block below is the exact contents of `/openapi.yaml`.
+
+```yaml
+openapi: 3.1.0
+info:
+  title: WhatsApp API NodeJS
+  version: 1.0.0
+  description: |
+    OpenAPI specification for the REST-oriented `v1` endpoints.
+
+    Authentication note:
+    If `PROTECT_ROUTES=true`, send `Authorization: Bearer <TOKEN>`.
+servers:
+  - url: http://localhost:3333
+    description: Local development
+tags:
+  - name: Health
+  - name: Instances
+  - name: Messages
+  - name: Groups
+security:
+  - BearerAuth: []
+  - {}
+paths:
+  /status:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getStatus
+      security:
+        - BearerAuth: []
+        - {}
+      responses:
+        "200":
+          description: API is up
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+  /v1/instances:
+    post:
+      tags: [Instances]
+      summary: Create or reinitialize an instance
+      operationId: createInstance
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InstanceInitRequest"
+      responses:
+        "200":
+          description: Instance already existed and was reused/reinitialized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceInitResponse"
+        "201":
+          description: Instance created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceInitResponse"
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    get:
+      tags: [Instances]
+      summary: List instances
+      operationId: listInstances
+      parameters:
+        - in: query
+          name: active
+          required: false
+          schema:
+            type: boolean
+          description: When true, returns persisted session keys only
+      responses:
+        "200":
+          description: Instances listed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceListResponse"
+  /v1/instances/restore:
+    post:
+      tags: [Instances]
+      summary: Restore persisted sessions to memory
+      operationId: restoreInstances
+      responses:
+        "200":
+          description: Sessions restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreInstancesResponse"
+  /v1/instances/{key}:
+    get:
+      tags: [Instances]
+      summary: Get instance info
+      operationId: getInstanceByKey
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Instance fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceInfoResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      tags: [Instances]
+      summary: Delete instance and session data
+      operationId: deleteInstanceByKey
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Instance deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteInstanceResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/session:
+    delete:
+      tags: [Instances]
+      summary: Logout instance session
+      operationId: logoutInstanceSession
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Logout completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutResponse"
+        "403":
+          description: Key missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/qr:
+    get:
+      tags: [Instances]
+      summary: Get QR code as base64
+      operationId: getInstanceQrBase64
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: QR state fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QrBase64Response"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/messages:
+    post:
+      tags: [Messages]
+      summary: Send text message
+      operationId: sendTextMessage
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendTextMessageRequest"
+      responses:
+        "201":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendTextMessageResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups/{groupId}/messages:
+    post:
+      tags: [Groups, Messages]
+      summary: Send text message to a group
+      operationId: sendGroupTextMessage
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+        - $ref: "#/components/parameters/GroupIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendGroupMessageRequest"
+      responses:
+        "201":
+          description: Group message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendTextMessageResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups:
+    get:
+      tags: [Groups]
+      summary: List groups (cached or live-backed)
+      operationId: listInstanceGroups
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Groups listed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupListResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups/live:
+    get:
+      tags: [Groups]
+      summary: Fetch live groups from WhatsApp
+      operationId: getLiveGroups
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Live groups fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveGroupResponse"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/groups/{groupId}:
+    delete:
+      tags: [Groups]
+      summary: Leave a group
+      operationId: leaveGroup
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+        - $ref: "#/components/parameters/GroupIdParam"
+      responses:
+        "200":
+          description: Group left
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericDataResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    KeyParam:
+      name: key
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Instance key
+    GroupIdParam:
+      name: groupId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: WhatsApp group JID (example `12345-67890@g.us`)
+  schemas:
+    ApiError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: invalid key supplied
+    GenericDataResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          description: Operation payload
+          type: object
+          additionalProperties: true
+    InstanceBrowser:
+      type: object
+      properties:
+        platform:
+          type: string
+          example: windows
+        browser:
+          type: string
+          example: Chrome
+        version:
+          type: string
+          example: 4.0.0
+    InstanceInitRequest:
+      type: object
+      properties:
+        key:
+          type: string
+          example: "123"
+        webhook:
+          type: boolean
+          default: false
+        webhookUrl:
+          type: string
+          nullable: true
+          example: https://webhook.site/uuid
+    InstanceInitResponse:
+      type: object
+      required: [error, message, key, reused, qrcode, status, browser]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Initializing successfully
+        key:
+          type: string
+          example: "123"
+        reused:
+          type: boolean
+          example: false
+        webhook:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              example: false
+            webhookUrl:
+              type: string
+              nullable: true
+        qrcode:
+          type: object
+          properties:
+            url:
+              type: string
+              example: http://localhost:3333/instance/qr?key=123
+        status:
+          type: string
+          example: connecting
+        browser:
+          $ref: "#/components/schemas/InstanceBrowser"
+    InstanceInfoData:
+      type: object
+      properties:
+        instance_key:
+          type: string
+          example: "123"
+        phone_connected:
+          type: boolean
+          example: true
+        webhookUrl:
+          type: string
+          nullable: true
+        user:
+          type: object
+          additionalProperties: true
+    InstanceInfoResponse:
+      type: object
+      required: [error, message, instance_data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Instance fetched successfully
+        instance_data:
+          $ref: "#/components/schemas/InstanceInfoData"
+    InstanceListResponse:
+      type: object
+      required: [error, message, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: All instance listed
+        data:
+          type: array
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/InstanceInfoData"
+              - type: string
+    RestoreInstancesResponse:
+      type: object
+      required: [error, message, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: All instances restored
+        data:
+          type: array
+          items:
+            type: string
+            example: "123"
+    DeleteInstanceResponse:
+      type: object
+      required: [error, message, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Instance deleted successfully
+        data:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+            - type: object
+              additionalProperties: true
+    LogoutResponse:
+      type: object
+      required: [error, message, errormsg]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: logout successfull
+        errormsg:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+    QrBase64Response:
+      type: object
+      required: [error, message, qrcode, connected, status]
+      properties:
+        error:
+          type: boolean
+        message:
+          type: string
+        qrcode:
+          type: string
+          description: Base64 QR image (Data URL)
+        connected:
+          type: boolean
+        status:
+          type: string
+          example: open
+        lastError:
+          type: string
+          nullable: true
+        lastErrorCode:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: integer
+    SendTextMessageRequest:
+      type: object
+      required: [to, message]
+      properties:
+        to:
+          type: string
+          description: Phone number with country code
+          example: "5511999999999"
+        message:
+          type: string
+          example: Hello from API
+    SendTextMessageResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          type: object
+          additionalProperties: true
+    SendGroupMessageRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: Hello group
+    GroupSummary:
+      type: object
+      properties:
+        index:
+          type: integer
+          example: 0
+        name:
+          type: string
+          example: Team Group
+        jid:
+          type: string
+          example: 12345-67890@g.us
+        participant:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        creation:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: integer
+        subjectOwner:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+    GroupListResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupSummary"
+    LiveGroupResponse:
+      type: object
+      required: [error, message, instance_data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Instance fetched successfully
+        instance_data:
+          type: object
+          additionalProperties: true
+```
