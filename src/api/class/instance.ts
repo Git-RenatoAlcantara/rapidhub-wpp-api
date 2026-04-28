@@ -24,6 +24,23 @@ function normalizeWebhookUrl(value: any): string | null {
     return normalized.length > 0 ? normalized : null
 }
 
+function hasBinaryNodeTag(node: any, tag: string): boolean {
+    if (!node || typeof node !== 'object') return false
+    if (node.tag === tag) return true
+    if (!Array.isArray(node.content)) return false
+
+    return node.content.some((child: any) => hasBinaryNodeTag(child, tag))
+}
+
+function getStreamErrorReason(payload: any): string {
+    return (
+        payload?.reasonNode?.tag ||
+        payload?.fullErrorNode?.content?.find?.((child: any) => child?.tag)
+            ?.tag ||
+        ''
+    )
+}
+
 function createBaileysLogger() {
     return pino({
         level: config.log.level,
@@ -42,6 +59,10 @@ function createBaileysLogger() {
                     message === 'stream errored out' &&
                     String(payload?.fullErrorNode?.attrs?.code || '') ===
                         String(DisconnectReason.restartRequired)
+
+                const isAckStreamError =
+                    message === 'stream errored out' &&
+                    getStreamErrorReason(payload) === 'ack'
 
                 const isPreKeyUploadTimeout =
                     message ===
@@ -62,6 +83,7 @@ function createBaileysLogger() {
                     level >= 50 &&
                     (
                         isRestartRequiredStreamError ||
+                        isAckStreamError ||
                         isPreKeyUploadTimeout ||
                         isMissingSessionDecrypt
                     )
@@ -346,7 +368,53 @@ export class WhatsAppInstance {
             return
         }
 
+        if (
+            disconnectCode === DisconnectReason.badSession &&
+            String(disconnectMessage || '')
+                .toLowerCase()
+                .includes('stream errored (ack)')
+        ) {
+            this.instance.lastConnectionError =
+                'Stream Errored (ack). Reconectando automaticamente sem apagar a sessao.'
+            return
+        }
+
         this.instance.lastConnectionError = disconnectMessage
+    }
+
+    isAckStreamError(
+        disconnectCode: number | null,
+        disconnectMessage: string,
+        lastDisconnect: any
+    ): boolean {
+        if (disconnectCode !== DisconnectReason.badSession) return false
+
+        if (
+            String(disconnectMessage || '')
+                .toLowerCase()
+                .includes('stream errored (ack)')
+        )
+            return true
+
+        const errorData = lastDisconnect?.error?.data
+        return hasBinaryNodeTag(errorData, 'ack')
+    }
+
+    isTransientDisconnect(
+        disconnectCode: number | null,
+        disconnectMessage: string,
+        lastDisconnect: any
+    ): boolean {
+        return (
+            disconnectCode === DisconnectReason.restartRequired ||
+            disconnectCode === DisconnectReason.timedOut ||
+            disconnectCode === 408 ||
+            this.isAckStreamError(
+                disconnectCode,
+                disconnectMessage,
+                lastDisconnect
+            )
+        )
     }
 
     isTerminalDisconnectCode(disconnectCode: number | null): boolean {
@@ -483,10 +551,11 @@ export class WhatsAppInstance {
 
                 this.setDisconnectState(disconnectCode, disconnectMessage)
 
-                const isExpectedTransientClose =
-                    disconnectCode === DisconnectReason.restartRequired ||
-                    disconnectCode === DisconnectReason.timedOut ||
-                    disconnectCode === 408
+                const isExpectedTransientClose = this.isTransientDisconnect(
+                    disconnectCode,
+                    disconnectMessage,
+                    lastDisconnect
+                )
 
                 logger[isExpectedTransientClose ? 'warn' : 'error'](
                     {
@@ -509,6 +578,8 @@ export class WhatsAppInstance {
                         },
                         'STATE: Manual logout close event received'
                     )
+                } else if (isExpectedTransientClose) {
+                    await this.reconnectInstance(disconnectCode)
                 } else if (this.isTerminalDisconnectCode(disconnectCode)) {
                     await this.deleteSessionData(this.key)
                 } else if (disconnectCode === 405) {
