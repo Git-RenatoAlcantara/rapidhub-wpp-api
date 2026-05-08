@@ -114,6 +114,7 @@ Todas as envs são lidas em [src/config/config.ts](src/config/config.ts). Valore
 | `DELETE` | `/v1/instances/:key/session` | logout (mantém key livre para novo init) |
 | `GET` | `/v1/instances/:key/qr` | retorna QR base64 + status |
 | `POST` | `/v1/instances/:key/messages` | body: `{ to, message }` (aceita `id` em vez de `to`) |
+| `GET` | `/v1/instances/:key/contacts` | contatos sincronizados pelo Baileys |
 | `POST` | `/v1/instances/:key/groups/:groupId/messages` | body: `{ message }` |
 | `GET` | `/v1/instances/:key/groups` | grupos cacheados |
 | `GET` | `/v1/instances/:key/groups/live` | força fetch ao Baileys |
@@ -129,7 +130,7 @@ Todas as envs são lidas em [src/config/config.ts](src/config/config.ts). Valore
 
 `group`: `/create`, `/listall` (GET), `/leave` (GET|DELETE), `/inviteuser`, `/makeadmin`, `/demoteadmin`, `/getinvitecode` (GET), `/getinstanceinvitecode` (GET), `/getallgroups` (GET), `/participantsupdate`, `/settingsupdate`, `/updatesubject`, `/updatedescription`, `/inviteinfo`, `/groupjoin`
 
-`misc`: `/onwhatsapp` (GET), `/downProfile` (GET), `/getStatus` (GET), `/blockUser` (GET), `/updateProfilePicture` (POST), `/getuserorgroupbyid` (GET)
+`misc`: `/onwhatsapp` (GET), `/contacts` (GET), `/downProfile` (GET), `/getStatus` (GET), `/blockUser` (GET), `/updateProfilePicture` (POST), `/getuserorgroupbyid` (GET)
 
 ## Autenticação e middlewares
 

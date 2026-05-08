@@ -50,3 +50,8 @@ export const getUserOrGroupById = async (req: Request, res: Response) => {
     )
     return res.status(201).json({ error: false, data: data })
 }
+
+export const getContacts = async (req: Request, res: Response) => {
+    const data = await WhatsAppInstances[req.query.key as string].getContacts()
+    return res.status(200).json({ error: false, data: data })
+}

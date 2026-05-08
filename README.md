@@ -218,6 +218,7 @@ In addition to the legacy RPC-style routes, this project now exposes a REST-orie
 - `DELETE /v1/instances/:key/session`
 - `GET /v1/instances/:key/qr`
 - `POST /v1/instances/:key/messages` (body: `{ "to": "5511999999999", "message": "Hello" }`)
+- `GET /v1/instances/:key/contacts`
 - `POST /v1/instances/:key/groups/:groupId/messages` (body: `{ "message": "Hello group" }`)
 - `GET /v1/instances/:key/groups`
 - `GET /v1/instances/:key/groups/live`

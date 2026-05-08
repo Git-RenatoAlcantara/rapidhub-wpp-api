@@ -115,6 +115,7 @@ export class WhatsAppInstance {
     instance: {
         key: string
         chats: any[]
+        contacts: any[]
         qr: string
         messages: any[]
         qrRetry: number
@@ -130,6 +131,7 @@ export class WhatsAppInstance {
     } = {
         key: this.key,
         chats: [],
+        contacts: [],
         qr: '',
         messages: [],
         qrRetry: 0,
@@ -698,6 +700,42 @@ export class WhatsAppInstance {
                 await this.SendWebhook('presence', json, this.key)
         })
 
+        sock?.ev.on('messaging-history.set', async ({ chats, contacts }: any) => {
+            if (Array.isArray(chats) && chats.length > 0) {
+                this.instance.chats = chats.map((chat: any) => ({
+                    ...chat,
+                    messages: [],
+                }))
+            }
+
+            if (Array.isArray(contacts) && contacts.length > 0) {
+                this.instance.contacts = this.mergeContacts(
+                    this.instance.contacts,
+                    contacts
+                )
+            }
+
+            await this.updateDb(this.instance.chats)
+            await this.updateContactsDb(this.instance.contacts)
+            await this.updateDbGroupsParticipants()
+        })
+
+        sock?.ev.on('contacts.upsert', async (contacts: any[]) => {
+            this.instance.contacts = this.mergeContacts(
+                this.instance.contacts,
+                contacts
+            )
+            await this.updateContactsDb(this.instance.contacts)
+        })
+
+        sock?.ev.on('contacts.update', async (contacts: any[]) => {
+            this.instance.contacts = this.mergeContacts(
+                this.instance.contacts,
+                contacts
+            )
+            await this.updateContactsDb(this.instance.contacts)
+        })
+
         // on receive all chats
         sock?.ev.on('chats.set', async ({ chats }: any) => {
             this.instance.chats = []
@@ -1247,6 +1285,33 @@ export class WhatsAppInstance {
         }
     }
 
+    async getContacts() {
+        const storedContacts = await this.getStoredContacts()
+        const contacts =
+            Array.isArray(this.instance.contacts) && this.instance.contacts.length > 0
+                ? this.instance.contacts
+                : storedContacts
+
+        if (contacts.length > 0) {
+            return contacts
+                .filter((contact: any) => this.isUserContact(contact))
+                .map((contact: any) => this.formatContact(contact))
+        }
+
+        const chats =
+            Array.isArray(this.instance.chats) && this.instance.chats.length > 0
+                ? this.instance.chats
+                : await this.getChat()
+
+        return chats
+            .filter(
+                (chat: any) =>
+                    typeof chat?.id === 'string' &&
+                    chat.id.endsWith('@s.whatsapp.net')
+            )
+            .map((chat: any) => this.formatContact(chat))
+    }
+
     // Group Methods
     parseParticipants(users: string[]): string[] {
         return users.map((user) => this.getWhatsAppId(user))
@@ -1493,7 +1558,87 @@ export class WhatsAppInstance {
             where: { key: key },
             select: { chat: true },
         })
-        return Array.isArray(dbResult?.chat) ? (dbResult.chat as any[]) : []
+        return this.normalizeStoredData(dbResult?.chat).chats
+    }
+
+    normalizeStoredData(data: any): { chats: any[]; contacts: any[] } {
+        if (Array.isArray(data)) {
+            return { chats: data, contacts: [] }
+        }
+
+        if (data && typeof data === 'object') {
+            return {
+                chats: Array.isArray(data.chats) ? data.chats : [],
+                contacts: Array.isArray(data.contacts) ? data.contacts : [],
+            }
+        }
+
+        return { chats: [], contacts: [] }
+    }
+
+    async getStoredData(key = this.key): Promise<{ chats: any[]; contacts: any[] }> {
+        const dbResult = await prisma.chat.findUnique({
+            where: { key: key },
+            select: { chat: true },
+        })
+        return this.normalizeStoredData(dbResult?.chat)
+    }
+
+    async getStoredContacts(key = this.key): Promise<any[]> {
+        return (await this.getStoredData(key)).contacts
+    }
+
+    mergeContacts(existingContacts: any[] = [], incomingContacts: any[] = []) {
+        const contactsById = new Map<string, any>()
+
+        for (const contact of existingContacts) {
+            if (typeof contact?.id === 'string') {
+                contactsById.set(contact.id, contact)
+            }
+        }
+
+        for (const contact of incomingContacts) {
+            if (typeof contact?.id === 'string') {
+                contactsById.set(contact.id, {
+                    ...(contactsById.get(contact.id) || {}),
+                    ...contact,
+                })
+            }
+        }
+
+        return Array.from(contactsById.values())
+    }
+
+    isUserContactId(id: unknown) {
+        return typeof id === 'string' && id.endsWith('@s.whatsapp.net')
+    }
+
+    isUserContact(contact: any) {
+        return (
+            this.isUserContactId(contact?.id) ||
+            this.isUserContactId(contact?.phoneNumber) ||
+            (typeof contact?.id === 'string' && contact.id.endsWith('@lid'))
+        )
+    }
+
+    formatContact(contact: any) {
+        return {
+            id: contact.id,
+            phoneNumber: contact.phoneNumber,
+            lid: contact.lid,
+            name:
+                contact.name ||
+                contact.notify ||
+                contact.verifiedName ||
+                contact.pushName ||
+                '',
+            notify: contact.notify,
+            verifiedName: contact.verifiedName,
+            imgUrl: contact.imgUrl,
+            status: contact.status,
+            unreadCount: contact.unreadCount,
+            lastMessageTimestamp: contact.conversationTimestamp,
+        }
     }
 
     async createGroupByApp(newChat: any[]) {
@@ -1676,10 +1821,34 @@ export class WhatsAppInstance {
 
     async updateDb(object: any) {
         try {
+            const storedData = await this.getStoredData()
+            const chatData = {
+                chats: Array.isArray(object) ? object : [],
+                contacts: storedData.contacts,
+            }
+
             await prisma.chat.upsert({
                 where: { key: this.key },
-                update: { chat: object },
-                create: { key: this.key, chat: object },
+                update: { chat: chatData },
+                create: { key: this.key, chat: chatData },
+            })
+        } catch (e) {
+            logger.error('Error updating document failed')
+        }
+    }
+
+    async updateContactsDb(contacts: any[]) {
+        try {
+            const storedData = await this.getStoredData()
+            const chatData = {
+                chats: storedData.chats,
+                contacts: this.mergeContacts(storedData.contacts, contacts),
+            }
+
+            await prisma.chat.upsert({
+                where: { key: this.key },
+                update: { chat: chatData },
+                create: { key: this.key, chat: chatData },
             })
         } catch (e) {
             logger.error('Error updating document failed')

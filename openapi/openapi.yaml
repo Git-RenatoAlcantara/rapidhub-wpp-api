@@ -14,6 +14,7 @@ tags:
   - name: Health
   - name: Instances
   - name: Messages
+  - name: Contacts
   - name: Groups
 security:
   - BearerAuth: []
@@ -200,6 +201,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SendTextMessageResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/contacts:
+    get:
+      tags: [Contacts]
+      summary: List synced contacts
+      description: >
+        Returns contacts synced for the connected WhatsApp account from Baileys
+        history and contact update events. Falls back to individual chats if
+        the contact list is not available yet.
+      operationId: listInstanceContacts
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Contacts listed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactListResponse"
         "401":
           description: Phone not connected
           content:
@@ -551,6 +582,60 @@ components:
         data:
           type: object
           additionalProperties: true
+    Contact:
+      type: object
+      properties:
+        id:
+          type: string
+          description: WhatsApp contact ID in JID or LID format
+          example: 5511999999999@s.whatsapp.net
+        phoneNumber:
+          type: string
+          nullable: true
+          description: Phone-number JID when Baileys provides it
+          example: 5511999999999@s.whatsapp.net
+        lid:
+          type: string
+          nullable: true
+          description: Linked-device contact ID when available
+          example: 1234567890@lid
+        name:
+          type: string
+          example: Maria Silva
+        notify:
+          type: string
+          nullable: true
+          example: Maria
+        verifiedName:
+          type: string
+          nullable: true
+        imgUrl:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+        status:
+          type: string
+          nullable: true
+        unreadCount:
+          type: integer
+          nullable: true
+        lastMessageTimestamp:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: integer
+    ContactListResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Contact"
     SendGroupMessageRequest:
       type: object
       required: [message]

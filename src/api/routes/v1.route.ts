@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express'
 import * as instanceController from '../controllers/instance.controller.js'
 import * as messageController from '../controllers/message.controller.js'
 import * as groupController from '../controllers/group.controller.js'
+import * as miscController from '../controllers/misc.controller.js'
 import keyVerify from '../middlewares/keyCheck.js'
 import loginVerify from '../middlewares/loginCheck.js'
 import { bindParamToQuery } from '../middlewares/paramKey.js'
@@ -41,6 +42,10 @@ router
         },
         messageController.Text
     )
+
+router
+    .route('/instances/:key/contacts')
+    .get(bindKeyParam, keyVerify, loginVerify, miscController.getContacts)
 
 router
     .route('/instances/:key/groups/:groupId/messages')

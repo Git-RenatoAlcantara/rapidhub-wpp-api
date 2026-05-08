@@ -24,6 +24,7 @@ The default base URL during local development is `http://localhost:3333`. Replac
 - [DELETE /v1/instances/{key}/session](/v1/instances/{key}/session): Logout the instance (frees the key for re-pairing).
 - [GET /v1/instances/{key}/qr](/v1/instances/{key}/qr): Get the pairing QR code as a base64 data URL plus connection status. Poll until `connected: true`.
 - [POST /v1/instances/{key}/messages](/v1/instances/{key}/messages): Send a text message. Body `{ "to": "5511999999999", "message": "Hello" }` (the field `id` is also accepted as an alias for `to`).
+- [GET /v1/instances/{key}/contacts](/v1/instances/{key}/contacts): List contacts synced for the connected WhatsApp account. Contacts come from Baileys `messaging-history.set`, `contacts.upsert`, and `contacts.update`; falls back to individual chats if contact history is not available yet.
 - [POST /v1/instances/{key}/groups/{groupId}/messages](/v1/instances/{key}/groups/{groupId}/messages): Send a text message to a group. Body `{ "message": "..." }`.
 - [GET /v1/instances/{key}/groups](/v1/instances/{key}/groups): List groups from the local cache.
 - [GET /v1/instances/{key}/groups/live](/v1/instances/{key}/groups/live): Force a live fetch from WhatsApp.
@@ -40,7 +41,7 @@ The default base URL during local development is `http://localhost:3333`. Replac
 - [POST /message/button](/message/button), [POST /message/list](/message/list), [POST /message/contact](/message/contact), [POST /message/mediabutton](/message/mediabutton), [POST /message/react](/message/react), [POST /message/read](/message/read): See OpenAPI for body shapes.
 - [PUT /message/setstatus](/message/setstatus): Send presence. Body: `{ id, status }` where status is one of `unavailable`, `available`, `composing`, `recording`, `paused`.
 - Group routes (`/group/create`, `/group/listall`, `/group/leave`, `/group/inviteuser`, `/group/makeadmin`, `/group/demoteadmin`, `/group/getinvitecode`, `/group/groupjoin`, etc.): All require `?key=`. Most require the phone to be connected.
-- Misc routes (`/misc/onwhatsapp`, `/misc/downProfile`, `/misc/getStatus`, `/misc/blockUser`, `/misc/updateProfilePicture`, `/misc/getuserorgroupbyid`): Lookup and profile utilities.
+- Misc routes (`/misc/onwhatsapp`, `/misc/contacts`, `/misc/downProfile`, `/misc/getStatus`, `/misc/blockUser`, `/misc/updateProfilePicture`, `/misc/getuserorgroupbyid`): Lookup, contact, and profile utilities.
 
 ## Conventions
 
