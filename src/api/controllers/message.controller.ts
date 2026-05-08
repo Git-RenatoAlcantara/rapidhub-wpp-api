@@ -1,9 +1,44 @@
 import { Request, Response } from 'express'
 
+const firstStringLike = (...values: unknown[]) => {
+    const value = values.find(
+        (item) => typeof item === 'string' || typeof item === 'number'
+    )
+
+    return typeof value === 'undefined' ? undefined : String(value)
+}
+
 export const Text = async (req: Request, res: Response) => {
+    const to = firstStringLike(
+        req.body?.id,
+        req.body?.to,
+        req.query.id,
+        req.query.to
+    )
+    const message = firstStringLike(
+        req.body?.message,
+        req.body?.text,
+        req.query.message,
+        req.query.text
+    )
+
+    if (!to?.trim()) {
+        return res.status(400).json({
+            error: true,
+            message: 'id/to parameter is required',
+        })
+    }
+
+    if (!message?.trim()) {
+        return res.status(400).json({
+            error: true,
+            message: 'message/text parameter is required',
+        })
+    }
+
     const data = await WhatsAppInstances[req.query.key as string].sendTextMessage(
-        req.body.id,
-        req.body.message
+        to,
+        message
     )
     return res.status(201).json({ error: false, data: data })
 }

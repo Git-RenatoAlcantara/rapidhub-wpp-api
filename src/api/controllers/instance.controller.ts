@@ -287,7 +287,7 @@ export const list = async (req: Request, res: Response) => {
         const sessions = await prisma.session.findMany({
             select: { name: true },
         })
-        const instance = sessions.map((session) => session.name)
+        const instance = sessions.map((session: { name: string }) => session.name)
 
         return res.json({
             error: false,
