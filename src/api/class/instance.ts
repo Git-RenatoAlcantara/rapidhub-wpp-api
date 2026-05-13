@@ -126,6 +126,8 @@ export class WhatsAppInstance {
         reconnectInProgress: boolean
         reconnectAttempts: number
         manualLogoutInProgress: boolean
+        pairingCode: string
+        pairingPhoneNumber: string
         online?: boolean
         sock?: WASocket | null
     } = {
@@ -142,6 +144,8 @@ export class WhatsAppInstance {
         reconnectInProgress: false,
         reconnectAttempts: 0,
         manualLogoutInProgress: false,
+        pairingCode: '',
+        pairingPhoneNumber: '',
     }
 
     axiosInstance: AxiosInstance = axios.create({
@@ -241,10 +245,50 @@ export class WhatsAppInstance {
         this.instance.qr = ''
         this.instance.qrRetry = 0
         this.instance.reconnectAttempts = 0
+        this.instance.pairingCode = ''
+        this.instance.pairingPhoneNumber = ''
         this.instance.sock = makeWASocket(socketConfig)
         this.socketGeneration += 1
         this.setHandler(this.socketGeneration)
         return this
+    }
+
+    async requestPairingCode(phoneNumber: string): Promise<string> {
+        const normalized = String(phoneNumber || '').replace(/\D/g, '')
+        if (!/^\d{8,15}$/.test(normalized)) {
+            throw new Error(
+                'phoneNumber inválido. Use o formato E.164 sem o sinal de + (ex.: 5511999999999).'
+            )
+        }
+
+        if (this.instance.sock) {
+            await this.teardownSocket()
+            this.initPromise = null
+        }
+
+        await this.init()
+
+        const sock = this.instance.sock as any
+        if (!sock) {
+            throw new Error('Socket não foi inicializado.')
+        }
+
+        if (sock?.authState?.creds?.registered) {
+            throw new Error(
+                'Instância já está registrada. Faça logout antes de gerar um novo código de pareamento.'
+            )
+        }
+
+        if (typeof sock.requestPairingCode !== 'function') {
+            throw new Error(
+                'A versão do Baileys instalada não suporta requestPairingCode.'
+            )
+        }
+
+        const code = await sock.requestPairingCode(normalized)
+        this.instance.pairingCode = code
+        this.instance.pairingPhoneNumber = normalized
+        return code
     }
 
     async teardownSocket() {

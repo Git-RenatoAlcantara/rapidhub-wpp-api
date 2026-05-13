@@ -29,6 +29,10 @@ router
     .get(bindKeyParam, keyVerify, instanceController.qrbase64)
 
 router
+    .route('/instances/:key/pairing-code')
+    .post(bindKeyParam, instanceController.pairingCode)
+
+router
     .route('/instances/:key/messages')
     .post(
         bindKeyParam,

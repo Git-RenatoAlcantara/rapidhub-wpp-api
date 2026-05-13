@@ -308,4 +308,46 @@ export const list = async (req: Request, res: Response) => {
     })
 }
 
+export const pairingCode = async (req: Request, res: Response) => {
+    try {
+        const keySource = (req.query.key ?? req.body?.key) as string | undefined
+        const phoneSource =
+            (req.body?.phoneNumber ?? req.query.phoneNumber) as string | undefined
+
+        const key = keySource ? keySource.toString().trim() : ''
+        const phoneNumber = phoneSource ? phoneSource.toString().trim() : ''
+
+        if (!phoneNumber) {
+            return res.status(400).json({
+                error: true,
+                message:
+                    'phoneNumber é obrigatório (E.164 sem o sinal de +, ex.: 5511999999999).',
+            })
+        }
+
+        let instance = key ? WhatsAppInstances[key] : null
+        if (!instance) {
+            instance = new WhatsAppInstance(key || undefined, false, null)
+            WhatsAppInstances[instance.key] = instance
+        }
+
+        const code = await instance.requestPairingCode(phoneNumber)
+
+        return res.status(200).json({
+            error: false,
+            message: 'Pairing code generated successfully',
+            key: instance.key,
+            phoneNumber: (instance as any).instance.pairingPhoneNumber,
+            pairingCode: code,
+            status: (instance as any).instance.connectionStatus,
+        })
+    } catch (error: any) {
+        logger.error(error)
+        return res.status(400).json({
+            error: true,
+            message: error?.message || 'Falha ao gerar código de pareamento',
+        })
+    }
+}
+
 export { deleteInstance as delete }
