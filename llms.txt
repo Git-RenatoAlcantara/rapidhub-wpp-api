@@ -23,6 +23,7 @@ The default base URL during local development is `http://localhost:3333`. Replac
 - [DELETE /v1/instances/{key}](/v1/instances/{key}): Delete the session permanently (purges DB rows).
 - [DELETE /v1/instances/{key}/session](/v1/instances/{key}/session): Logout the instance (frees the key for re-pairing).
 - [GET /v1/instances/{key}/qr](/v1/instances/{key}/qr): Get the pairing QR code as a base64 data URL plus connection status. Poll until `connected: true`.
+- [POST /v1/instances/{key}/pairing-code](/v1/instances/{key}/pairing-code): Request an 8-character phone pairing code (alternative to QR scan). Body `{ "phoneNumber": "5511999999999" }`. The user enters the code in WhatsApp under "Linked devices > Link with phone number". Can be used without a pre-existing `key`; the server creates the instance automatically.
 - [POST /v1/instances/{key}/messages](/v1/instances/{key}/messages): Send a text message. Body `{ "to": "5511999999999", "message": "Hello" }` (the field `id` is also accepted as an alias for `to`).
 - [GET /v1/instances/{key}/contacts](/v1/instances/{key}/contacts): List contacts synced for the connected WhatsApp account. Contacts come from Baileys `messaging-history.set`, `contacts.upsert`, and `contacts.update`; falls back to individual chats if contact history is not available yet.
 - [POST /v1/instances/{key}/groups/{groupId}/messages](/v1/instances/{key}/groups/{groupId}/messages): Send a text message to a group. Body `{ "message": "..." }`.
@@ -33,6 +34,7 @@ The default base URL during local development is `http://localhost:3333`. Replac
 ## Legacy endpoints
 
 - [GET /instance/init](/instance/init): RPC-style instance creation. Query: `key`, `webhook`, `webhookUrl`. Equivalent to `POST /v1/instances`.
+- [POST /instance/pairingcode](/instance/pairingcode): Request a phone pairing code. Body: `{ "phoneNumber": "5511999999999" }`. Equivalent to `POST /v1/instances/{key}/pairing-code`.
 - [GET /instance/qrbase64](/instance/qrbase64): Returns `{ qrcode, connected, status, lastError }` — same payload as the v1 QR endpoint.
 - [GET /instance/qr](/instance/qr): Renders an HTML page with the QR image (intended for browsers, not agents).
 - [POST /message/text](/message/text): Send text. Query: `key`. Body: `{ id, message }`.

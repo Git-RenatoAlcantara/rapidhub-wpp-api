@@ -1,4 +1,4 @@
-# rapidhub-wpp-api — Full reference for AI agents
+﻿# rapidhub-wpp-api â€” Full reference for AI agents
 
 > REST API over [Baileys](https://github.com/WhiskeySockets/Baileys) (WhatsApp Web Multi-Device) for managing multiple WhatsApp instances via HTTP. Each instance maps to one phone, persists its session in PostgreSQL, exposes endpoints for sending messages and managing groups, and emits webhook events for incoming traffic.
 
@@ -28,16 +28,16 @@ This file inlines everything an agent needs to operate the API without follow-up
 - An instance is created with `POST /v1/instances`. The first call generates a QR code; the user scans it with the WhatsApp app to link the device.
 - Once paired, the instance is **online** and accepts message-sending requests. Auth state is persisted in PostgreSQL, so the instance survives restarts (set `RESTORE_SESSIONS_ON_START_UP=true` to auto-reload at boot).
 - Two parallel route surfaces exist:
-  - **`/v1/*`** — REST-shaped, JSON bodies, path params. Preferred for new clients.
-  - **`/instance|/message|/group|/misc`** — legacy RPC-style, query strings, mostly the same controllers underneath.
+  - **`/v1/*`** â€” REST-shaped, JSON bodies, path params. Preferred for new clients.
+  - **`/instance|/message|/group|/misc`** â€” legacy RPC-style, query strings, mostly the same controllers underneath.
 - Incoming messages, presence updates, calls and group changes are pushed to a **webhook URL** (per-instance or global).
 - Storage: PostgreSQL via Prisma. Tables: `Session`, `AuthState`, `Chat`.
-- Hot state lives in the Node process (`global.WhatsAppInstances`). The API is **single-process**: do not run behind a load balancer with multiple replicas without sticky routing — different replicas would each see a partial view.
+- Hot state lives in the Node process (`global.WhatsAppInstances`). The API is **single-process**: do not run behind a load balancer with multiple replicas without sticky routing â€” different replicas would each see a partial view.
 
 ## 2. Authentication
 
 - **Bearer token (optional, global)**: when `PROTECT_ROUTES=true` is set in the environment, every request must include `Authorization: Bearer <TOKEN>` where `TOKEN` matches the `TOKEN` env. Otherwise the endpoints are open.
-- **Instance key (per-instance)**: every endpoint that operates on a specific instance requires `?key=<instanceKey>` in the query string (or `:key` in the path on `/v1/*` routes — the server copies it into the query for you). Missing keys return `403 { error: true, message: "no key query was present" }`. Invalid (unknown and not persisted) keys return `403 { error: true, message: "invalid key supplied" }`.
+- **Instance key (per-instance)**: every endpoint that operates on a specific instance requires `?key=<instanceKey>` in the query string (or `:key` in the path on `/v1/*` routes â€” the server copies it into the query for you). Missing keys return `403 { error: true, message: "no key query was present" }`. Invalid (unknown and not persisted) keys return `403 { error: true, message: "invalid key supplied" }`.
 - **Phone-online gate**: routes that depend on the WhatsApp socket (sending messages, group operations) reject with `401 { error: true, message: "phone isn't connected" }` when the instance is not in state `open`.
 
 ## 3. Identifiers (JIDs) and base URL
@@ -47,21 +47,21 @@ This file inlines everything an agent needs to operate the API without follow-up
   - International phone number, digits only: `5511999999999`
   - Full user JID: `5511999999999@s.whatsapp.net`
   - Group JID: `<id>@g.us` (group JIDs always contain `-`; for example `120363012345678901@g.us`)
-- The server normalizes them with this rule: contains `@g.us` or `@s.whatsapp.net` → use as-is; contains `-` → group; otherwise → user JID.
+- The server normalizes them with this rule: contains `@g.us` or `@s.whatsapp.net` â†’ use as-is; contains `-` â†’ group; otherwise â†’ user JID.
 
 ## 4. Connection lifecycle
 
 `status` field returned by the QR/info endpoints transitions through:
 
-- `idle` — instance object exists but the socket is not yet started
-- `connecting` — socket handshake in progress
-- `qr` — pairing QR available, waiting for scan
-- `open` — paired and ready to send
-- `close` — socket closed (will auto-reconnect unless terminal)
-- `reconnecting` — backoff retry in progress
-- `logging_out` — manual `DELETE /session` in flight
+- `idle` â€” instance object exists but the socket is not yet started
+- `connecting` â€” socket handshake in progress
+- `qr` â€” pairing QR available, waiting for scan
+- `open` â€” paired and ready to send
+- `close` â€” socket closed (will auto-reconnect unless terminal)
+- `reconnecting` â€” backoff retry in progress
+- `logging_out` â€” manual `DELETE /session` in flight
 
-Auto-reconnect uses linear backoff (`baseWait * attempts`, up to 15 s, capped at 10 attempts). It is **not** attempted for terminal codes: `loggedOut`, `badSession`, `multideviceMismatch`, `forbidden`, or `405` (upstream rejection — create a new key).
+Auto-reconnect uses linear backoff (`baseWait * attempts`, up to 15 s, capped at 10 attempts). It is **not** attempted for terminal codes: `loggedOut`, `badSession`, `multideviceMismatch`, `forbidden`, or `405` (upstream rejection â€” create a new key).
 
 ## 5. Endpoint reference
 
@@ -82,7 +82,7 @@ Common conventions:
 
 ### 5.2 Instances (REST `v1`)
 
-#### `POST /v1/instances` — Create or reinitialize
+#### `POST /v1/instances` â€” Create or reinitialize
 
 Request body (all optional):
 ```json
@@ -92,9 +92,9 @@ Request body (all optional):
   "webhookUrl": "https://example.com/webhook"
 }
 ```
-- `key` — if omitted, a UUID v4 is generated.
-- `webhook` — boolean; when true, this instance emits webhooks (also requires either `webhookUrl` or the global `WEBHOOK_URL`).
-- `webhookUrl` — overrides the global URL for this instance.
+- `key` â€” if omitted, a UUID v4 is generated.
+- `webhook` â€” boolean; when true, this instance emits webhooks (also requires either `webhookUrl` or the global `WEBHOOK_URL`).
+- `webhookUrl` â€” overrides the global URL for this instance.
 
 Response (`200` if reused, `201` if newly created):
 ```json
@@ -110,10 +110,10 @@ Response (`200` if reused, `201` if newly created):
 }
 ```
 
-#### `GET /v1/instances` — List
+#### `GET /v1/instances` â€” List
 
-- `?active=true` — returns the array of persisted session names (strings only).
-- No query — returns full instance details for everything currently in memory.
+- `?active=true` â€” returns the array of persisted session names (strings only).
+- No query â€” returns full instance details for everything currently in memory.
 
 ```json
 {
@@ -144,11 +144,11 @@ Reloads every persisted session from the database into memory. Returns the list 
 }
 ```
 
-#### `DELETE /v1/instances/{key}` — Permanent delete
+#### `DELETE /v1/instances/{key}` â€” Permanent delete
 
 Tears down the socket, removes DB rows (`Session`, cascaded `AuthState`). The key becomes invalid until re-init.
 
-#### `DELETE /v1/instances/{key}/session` — Logout
+#### `DELETE /v1/instances/{key}/session` â€” Logout
 
 Calls `sock.logout()`, tears down the socket, deletes session data. The key remains usable for a fresh `POST /v1/instances` (which will issue a new QR).
 
@@ -174,11 +174,38 @@ When the phone is already connected:
 ```
 
 When pairing failed with a known code, `lastErrorCode` will be one of:
-- `408` — pre-key timeout / QR scan timed out
-- `405` — WhatsApp rejected this device registration (use a fresh key)
-- `515` — restart required
+- `408` â€” pre-key timeout / QR scan timed out
+- `405` â€” WhatsApp rejected this device registration (use a fresh key)
+- `515` â€” restart required
 
-#### `POST /v1/instances/{key}/messages` — Send text
+#### `POST /v1/instances/{key}/pairing-code` â€” Request phone pairing code
+
+Alternative to QR scan: the user enters the returned 8-character code in WhatsApp under "Linked devices > Link with phone number".
+
+Request body:
+```json
+{ "phoneNumber": "5511999999999" }
+```
+- `phoneNumber` â€” E.164 format without the leading `+` (required).
+- `key` in the path is optional; if the instance does not exist, the server creates it and returns the generated key.
+
+Response `200`:
+```json
+{
+  "error": false,
+  "message": "Pairing code generated successfully",
+  "key": "my-custom-key",
+  "phoneNumber": "5511999999999",
+  "pairingCode": "ABCD-EFGH",
+  "status": "connecting"
+}
+```
+
+Errors `400`:
+- `phoneNumber Ã© obrigatÃ³rio (E.164 sem o sinal de +, ex.: 5511999999999).` â€” missing phone number.
+- `Falha ao gerar cÃ³digo de pareamento` â€” Baileys returned an error (e.g., instance already registered).
+
+#### `POST /v1/instances/{key}/messages` â€” Send text
 
 Body:
 ```json
@@ -194,6 +221,27 @@ Response `201`:
 #### `POST /v1/instances/{key}/groups/{groupId}/messages`
 
 Body: `{ "message": "Hello group" }`. `groupId` is the group JID (URL-encoded).
+
+#### `GET /v1/instances/{key}/contacts`
+
+Returns contacts synced for the connected WhatsApp account. Data is sourced from Baileys `messaging-history.set`, `contacts.upsert`, and `contacts.update` events. Falls back to individual chats if contact history is not yet available.
+
+```json
+{
+  "error": false,
+  "data": [
+    {
+      "id": "5511999999999@s.whatsapp.net",
+      "phoneNumber": "5511999999999@s.whatsapp.net",
+      "name": "Maria Silva",
+      "notify": "Maria",
+      "verifiedName": null,
+      "imgUrl": null,
+      "status": null
+    }
+  ]
+}
+```
 
 #### `GET /v1/instances/{key}/groups`
 
@@ -220,6 +268,7 @@ Leaves the group (`sock.groupLeave`).
 | Method(s) | Path | Notes |
 | --- | --- | --- |
 | GET, POST | `/instance/init` | Same as `POST /v1/instances`. Query: `key`, `webhook`, `webhookUrl`. |
+| POST | `/instance/pairingcode` | Same as `POST /v1/instances/{key}/pairing-code`. Body: `{ "phoneNumber": "5511999999999" }`. Query `key` is optional. |
 | GET | `/instance/qr` | Renders an HTML page with the QR (for browsers, not agents). |
 | GET | `/instance/qrbase64` | Same payload as `GET /v1/instances/{key}/qr`. |
 | GET | `/instance/info` | Same payload as `GET /v1/instances/{key}`. |
@@ -246,7 +295,7 @@ All `POST` and require `?key=`. Bodies are JSON unless marked.
 | `/message/mediabutton` | `{ id, btndata: { mediaType, image, mimeType, text, footerText?, buttons } }` | Template buttons with media header. |
 | `/message/react` | `{ id, key, emoji }` | React to a message. `key` is the WhatsApp message key object. |
 | `/message/read` | `{ msg }` | Mark messages as read. `msg` is an array of `{ remoteJid, id, participant? }`. |
-| `PUT /message/setstatus` | `{ id, status }` | Send presence. `status` ∈ `unavailable`, `available`, `composing`, `recording`, `paused`. |
+| `PUT /message/setstatus` | `{ id, status }` | Send presence. `status` âˆˆ `unavailable`, `available`, `composing`, `recording`, `paused`. |
 
 All return `201 { error: false, data: <Baileys send result> }`.
 
@@ -255,16 +304,16 @@ All return `201 { error: false, data: <Baileys send result> }`.
 | Method | Path | Body / Query |
 | --- | --- | --- |
 | POST | `/group/create` | `{ name, users: [...] }` |
-| GET | `/group/listall` | — |
+| GET | `/group/listall` | â€” |
 | GET, DELETE | `/group/leave` | `?id=<groupJid>` |
 | POST | `/group/inviteuser` | `{ id, users: [...] }` |
 | POST | `/group/makeadmin` | `{ id, users: [...] }` |
 | POST | `/group/demoteadmin` | `{ id, users: [...] }` |
-| GET | `/group/getinvitecode` | `?id=<groupJid>` → `{ error, link: "https://chat.whatsapp.com/<code>" }` |
+| GET | `/group/getinvitecode` | `?id=<groupJid>` â†’ `{ error, link: "https://chat.whatsapp.com/<code>" }` |
 | GET | `/group/getinstanceinvitecode` | `?id=<groupJid>` |
 | GET | `/group/getallgroups` | Live fetch from WhatsApp. |
-| POST | `/group/participantsupdate` | `{ id, users, action }` where `action` ∈ `add`/`remove`/`promote`/`demote`. |
-| POST | `/group/settingsupdate` | `{ id, action }` where `action` ∈ `announcement`/`not_announcement`/`locked`/`unlocked`. |
+| POST | `/group/participantsupdate` | `{ id, users, action }` where `action` âˆˆ `add`/`remove`/`promote`/`demote`. |
+| POST | `/group/settingsupdate` | `{ id, action }` where `action` âˆˆ `announcement`/`not_announcement`/`locked`/`unlocked`. |
 | POST | `/group/updatesubject` | `{ id, subject }` |
 | POST | `/group/updatedescription` | `{ id, description }` |
 | POST | `/group/inviteinfo` | `{ code }` |
@@ -274,9 +323,9 @@ All return `201 { error: false, data: <Baileys send result> }`.
 
 | Method | Path | Query / Body |
 | --- | --- | --- |
-| GET | `/misc/onwhatsapp` | `?id=<phone>` — checks if the number is on WhatsApp. |
-| GET | `/misc/downProfile` | `?id=<phoneOrJid>` — returns the profile picture URL. |
-| GET | `/misc/getStatus` | `?id=<phoneOrJid>` — fetches the user's "about" status. |
+| GET | `/misc/onwhatsapp` | `?id=<phone>` â€” checks if the number is on WhatsApp. |
+| GET | `/misc/downProfile` | `?id=<phoneOrJid>` â€” returns the profile picture URL. |
+| GET | `/misc/getStatus` | `?id=<phoneOrJid>` â€” fetches the user's "about" status. |
 | GET | `/misc/blockUser` | `?id=<phone>&block_status=block|unblock` |
 | POST | `/misc/updateProfilePicture` | `{ id, url }` |
 | GET | `/misc/getuserorgroupbyid` | `?id=<idOrJid>` |
@@ -290,7 +339,7 @@ All endpoints return JSON with a consistent envelope:
 ```
 
 - `error` is always present; mirrors the HTTP status (a 2xx pairs with `error: false`).
-- Many endpoints replace `data` with a domain-specific field (`instance_data`, `link`, `qrcode`, `errormsg`, etc.) — see schemas above and the OpenAPI section below.
+- Many endpoints replace `data` with a domain-specific field (`instance_data`, `link`, `qrcode`, `errormsg`, etc.) â€” see schemas above and the OpenAPI section below.
 
 Standard error shapes:
 ```json
@@ -316,7 +365,7 @@ When configured, the server `POST`s to your URL with this payload:
 - Timeout: 10 s. Failures are logged and swallowed (no retry).
 - Headers: standard `Content-Type: application/json` from axios.
 - Configure per-instance via `webhookUrl` in `POST /v1/instances`, or globally via env (`WEBHOOK_ENABLED=true` + `WEBHOOK_URL=...`).
-- Filter event types via `WEBHOOK_ALLOWED_EVENTS` (CSV, default `all`). **Never set this to empty** — that filters everything out.
+- Filter event types via `WEBHOOK_ALLOWED_EVENTS` (CSV, default `all`). **Never set this to empty** â€” that filters everything out.
 
 Event types and their `body` contents:
 
@@ -360,7 +409,7 @@ WEBHOOK_ALLOWED_EVENTS=messages.upsert,connection,group_participants
 ## 9. Quick start (curl)
 
 ```bash
-# 1. Create an instance — the server returns a key
+# 1. Create an instance â€” the server returns a key
 curl -X POST http://localhost:3333/v1/instances \
   -H 'Content-Type: application/json' \
   -d '{}'
@@ -413,10 +462,10 @@ With `PROTECT_ROUTES=true`, every request needs:
 | Domain | `Error: no account exists` | Thrown when `verifyId` finds the recipient is not on WhatsApp. Surface as a 5xx via the global error handler unless caught upstream. |
 
 QR-specific failure messages embedded in the QR response (`message` field, Portuguese):
-- `"QR Code expirou antes do escaneamento. Gere um novo QR e escaneie imediatamente."` — code `408`, scan timed out.
-- `"Connection Failure (405): WhatsApp rejeitou o registro deste dispositivo no momento. Tente novamente com uma nova chave."` — code `405`, upstream rejection. **Use a new key.**
-- `"Conexao do WhatsApp reiniciando (515). Aguarde alguns segundos e tente novamente."` — code `515`, restart required (auto-reconnect handles it).
-- `"Timeout de pre-key durante inicializacao. A API vai tentar reconectar automaticamente."` — pre-key upload timeout.
+- `"QR Code expirou antes do escaneamento. Gere um novo QR e escaneie imediatamente."` â€” code `408`, scan timed out.
+- `"Connection Failure (405): WhatsApp rejeitou o registro deste dispositivo no momento. Tente novamente com uma nova chave."` â€” code `405`, upstream rejection. **Use a new key.**
+- `"Conexao do WhatsApp reiniciando (515). Aguarde alguns segundos e tente novamente."` â€” code `515`, restart required (auto-reconnect handles it).
+- `"Timeout de pre-key durante inicializacao. A API vai tentar reconectar automaticamente."` â€” pre-key upload timeout.
 
 ## 11. Full OpenAPI 3.1 spec
 
@@ -439,6 +488,7 @@ tags:
   - name: Health
   - name: Instances
   - name: Messages
+  - name: Contacts
   - name: Groups
 security:
   - BearerAuth: []
@@ -605,6 +655,38 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/pairing-code:
+    post:
+      tags: [Instances]
+      summary: Request a phone-pairing code (alternative to QR scan)
+      description: >
+        Tears down any existing socket for the key and starts a fresh
+        connection requesting a pairing code linked to the supplied phone
+        number. The user enters the returned 8-character code in WhatsApp
+        under "Linked devices > Link with phone number". Fails if the
+        instance is already registered.
+      operationId: requestPairingCode
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingCodeRequest"
+      responses:
+        "200":
+          description: Pairing code generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingCodeResponse"
+        "400":
+          description: Invalid phone number or instance already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/instances/{key}/messages:
     post:
       tags: [Messages]
@@ -625,6 +707,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SendTextMessageResponse"
+        "401":
+          description: Phone not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Key missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/contacts:
+    get:
+      tags: [Contacts]
+      summary: List synced contacts
+      description: >
+        Returns contacts synced for the connected WhatsApp account from Baileys
+        history and contact update events. Falls back to individual chats if
+        the contact list is not available yet.
+      operationId: listInstanceContacts
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      responses:
+        "200":
+          description: Contacts listed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactListResponse"
         "401":
           description: Phone not connected
           content:
@@ -955,6 +1067,37 @@ components:
           oneOf:
             - type: "null"
             - type: integer
+    PairingCodeRequest:
+      type: object
+      required: [phoneNumber]
+      properties:
+        phoneNumber:
+          type: string
+          description: Phone number in E.164 format without the leading "+"
+          example: "5511999999999"
+    PairingCodeResponse:
+      type: object
+      required: [error, message, key, phoneNumber, pairingCode, status]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Pairing code generated successfully
+        key:
+          type: string
+          example: "123"
+        phoneNumber:
+          type: string
+          example: "5511999999999"
+        pairingCode:
+          type: string
+          description: 8-character pairing code to be entered in WhatsApp
+          example: ABCD-EFGH
+        status:
+          type: string
+          example: connecting
     SendTextMessageRequest:
       type: object
       required: [to, message]
@@ -976,6 +1119,60 @@ components:
         data:
           type: object
           additionalProperties: true
+    Contact:
+      type: object
+      properties:
+        id:
+          type: string
+          description: WhatsApp contact ID in JID or LID format
+          example: 5511999999999@s.whatsapp.net
+        phoneNumber:
+          type: string
+          nullable: true
+          description: Phone-number JID when Baileys provides it
+          example: 5511999999999@s.whatsapp.net
+        lid:
+          type: string
+          nullable: true
+          description: Linked-device contact ID when available
+          example: 1234567890@lid
+        name:
+          type: string
+          example: Maria Silva
+        notify:
+          type: string
+          nullable: true
+          example: Maria
+        verifiedName:
+          type: string
+          nullable: true
+        imgUrl:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: string
+        status:
+          type: string
+          nullable: true
+        unreadCount:
+          type: integer
+          nullable: true
+        lastMessageTimestamp:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: integer
+    ContactListResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error:
+          type: boolean
+          example: false
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Contact"
     SendGroupMessageRequest:
       type: object
       required: [message]
