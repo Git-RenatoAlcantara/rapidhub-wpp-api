@@ -181,6 +181,38 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/instances/{key}/pairing-code:
+    post:
+      tags: [Instances]
+      summary: Request a phone-pairing code (alternative to QR scan)
+      description: >
+        Tears down any existing socket for the key and starts a fresh
+        connection requesting a pairing code linked to the supplied phone
+        number. The user enters the returned 8-character code in WhatsApp
+        under "Linked devices > Link with phone number". Fails if the
+        instance is already registered.
+      operationId: requestPairingCode
+      parameters:
+        - $ref: "#/components/parameters/KeyParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingCodeRequest"
+      responses:
+        "200":
+          description: Pairing code generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingCodeResponse"
+        "400":
+          description: Invalid phone number or instance already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/instances/{key}/messages:
     post:
       tags: [Messages]
@@ -561,6 +593,37 @@ components:
           oneOf:
             - type: "null"
             - type: integer
+    PairingCodeRequest:
+      type: object
+      required: [phoneNumber]
+      properties:
+        phoneNumber:
+          type: string
+          description: Phone number in E.164 format without the leading "+"
+          example: "5511999999999"
+    PairingCodeResponse:
+      type: object
+      required: [error, message, key, phoneNumber, pairingCode, status]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Pairing code generated successfully
+        key:
+          type: string
+          example: "123"
+        phoneNumber:
+          type: string
+          example: "5511999999999"
+        pairingCode:
+          type: string
+          description: 8-character pairing code to be entered in WhatsApp
+          example: ABCD-EFGH
+        status:
+          type: string
+          example: connecting
     SendTextMessageRequest:
       type: object
       required: [to, message]
