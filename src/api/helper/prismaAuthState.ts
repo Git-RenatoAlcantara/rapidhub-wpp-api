@@ -93,7 +93,14 @@ export default async function usePrismaAuthState(sessionName: string) {
             return null
         }
     }
-    const creds = (await readData('creds')) || initAuthCreds()
+    const storedCreds = await readData('creds')
+    const creds = storedCreds || initAuthCreds()
+    // pairingEphemeralKeyPair may be absent from credentials stored before it was
+    // introduced in Baileys, or from sessions that pre-date the pairing-code flow.
+    // Regenerate it when missing so requestPairingCode never crashes on .public.
+    if (!creds.pairingEphemeralKeyPair) {
+        creds.pairingEphemeralKeyPair = initAuthCreds().pairingEphemeralKeyPair
+    }
     return {
         state: {
             creds,
