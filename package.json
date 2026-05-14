@@ -9,6 +9,7 @@
         "start": "node dist/server.js",
         "dev": "nodemon",
         "send:test": "tsx scripts/send-test-message.js",
+        "pairing:test": "node scripts/test-pairing-code.js",
         "groups:list": "tsx scripts/list-groups.js",
         "format:check": "prettier --check .",
         "format:write": "prettier --write .",
