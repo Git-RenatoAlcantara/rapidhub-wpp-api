@@ -8,6 +8,9 @@ yarn.lock
 sessiondata
 dist
 
+# Scripts de teste local
+scripts/test-*.js
+
 # IDEs
 .vscode/settings.json
 .idea
