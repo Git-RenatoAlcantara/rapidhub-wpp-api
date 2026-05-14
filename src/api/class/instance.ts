@@ -285,6 +285,12 @@ export class WhatsAppInstance {
             )
         }
 
+        // Aguarda o handshake de noise com os servidores do WA antes de enviar
+        // o IQ de pairing code (sendRawMessage rejeita se ws.isOpen === false).
+        if (typeof sock.waitForSocketOpen === 'function') {
+            await sock.waitForSocketOpen()
+        }
+
         const code = await sock.requestPairingCode(normalized)
         this.instance.pairingCode = code
         this.instance.pairingPhoneNumber = normalized
