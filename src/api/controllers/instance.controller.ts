@@ -332,14 +332,23 @@ export const pairingCode = async (req: Request, res: Response) => {
         }
 
         const code = await instance.requestPairingCode(phoneNumber)
+        const runtime = (instance as any).instance
 
         return res.status(200).json({
             error: false,
             message: 'Pairing code generated successfully',
             key: instance.key,
-            phoneNumber: (instance as any).instance.pairingPhoneNumber,
+            phoneNumber: runtime.pairingPhoneNumber,
             pairingCode: code,
-            status: (instance as any).instance.connectionStatus,
+            status: runtime.connectionStatus,
+            diagnostics: {
+                online: Boolean(runtime.online),
+                hasQr: Boolean(runtime.qr),
+                connectionStatus: runtime.connectionStatus,
+                reconnectAttempts: runtime.reconnectAttempts,
+                lastDisconnectCode: runtime.lastDisconnectCode,
+                lastConnectionError: runtime.lastConnectionError || null,
+            },
         })
     } catch (error: any) {
         logger.error(error)

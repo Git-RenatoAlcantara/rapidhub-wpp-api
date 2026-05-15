@@ -624,6 +624,46 @@ components:
         status:
           type: string
           example: connecting
+        diagnostics:
+          $ref: "#/components/schemas/PairingCodeDiagnostics"
+    PairingCodeDiagnostics:
+      type: object
+      required:
+        [
+          online,
+          hasQr,
+          connectionStatus,
+          reconnectAttempts,
+          lastDisconnectCode,
+          lastConnectionError,
+        ]
+      properties:
+        online:
+          type: boolean
+          description: Whether Baileys considers the instance online
+          example: false
+        hasQr:
+          type: boolean
+          description: Whether a QR payload is currently available in memory
+          example: true
+        connectionStatus:
+          type: string
+          description: Runtime connection status of the instance
+          example: connecting
+        reconnectAttempts:
+          type: integer
+          minimum: 0
+          example: 0
+        lastDisconnectCode:
+          nullable: true
+          oneOf:
+            - type: "null"
+            - type: integer
+          example: null
+        lastConnectionError:
+          type: string
+          nullable: true
+          example: null
     SendTextMessageRequest:
       type: object
       required: [to, message]

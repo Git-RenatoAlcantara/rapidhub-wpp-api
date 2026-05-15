@@ -285,6 +285,30 @@ export class WhatsAppInstance {
             )
         }
 
+        // O fluxo recomendado do Baileys pede o pairing code após o evento de QR.
+        // Isso evita corrida em que o socket abriu, mas ainda não terminou o bootstrap.
+        if (typeof sock.waitForConnectionUpdate === 'function') {
+            try {
+                await Promise.race([
+                    sock.waitForConnectionUpdate((update: any) => Boolean(update?.qr)),
+                    new Promise((_, reject) =>
+                        setTimeout(() => {
+                            reject(
+                                new Error(
+                                    'Timeout aguardando estado de QR para gerar pairing code.'
+                                )
+                            )
+                        }, 20000)
+                    ),
+                ])
+            } catch (error: any) {
+                throw new Error(
+                    error?.message ||
+                        'Falha ao preparar conexão antes de gerar pairing code.'
+                )
+            }
+        }
+
         // Aguarda o handshake de noise com os servidores do WA antes de enviar
         // o IQ de pairing code (sendRawMessage rejeita se ws.isOpen === false).
         if (typeof sock.waitForSocketOpen === 'function') {
