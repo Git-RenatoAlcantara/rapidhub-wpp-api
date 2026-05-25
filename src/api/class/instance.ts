@@ -268,40 +268,56 @@ export class WhatsAppInstance {
 
         await this.init()
 
-        const sock = this.instance.sock as any
-        if (!sock) {
-            throw new Error('Socket não foi inicializado.')
-        }
+        const maxAttempts = 2
+        let lastError: any = null
 
-        if (sock?.authState?.creds?.registered) {
-            throw new Error(
-                'Instância já está registrada. Faça logout antes de gerar um novo código de pareamento.'
-            )
-        }
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const sock = this.instance.sock as any
+            if (!sock) {
+                throw new Error('Socket não foi inicializado.')
+            }
 
-        if (typeof sock.requestPairingCode !== 'function') {
-            throw new Error(
-                'A versão do Baileys instalada não suporta requestPairingCode.'
-            )
-        }
+            if (sock?.authState?.creds?.registered) {
+                throw new Error(
+                    'Instância já está registrada. Faça logout antes de gerar um novo código de pareamento.'
+                )
+            }
 
-        // O fluxo recomendado do Baileys pede o pairing code após o evento de QR.
-        // Isso evita corrida em que o socket abriu, mas ainda não terminou o bootstrap.
-        if (typeof sock.waitForConnectionUpdate === 'function') {
+            if (typeof sock.requestPairingCode !== 'function') {
+                throw new Error(
+                    'A versão do Baileys instalada não suporta requestPairingCode.'
+                )
+            }
+
             try {
-                await Promise.race([
-                    sock.waitForConnectionUpdate((update: any) => Boolean(update?.qr)),
-                    new Promise((_, reject) =>
-                        setTimeout(() => {
-                            reject(
-                                new Error(
-                                    'Timeout aguardando estado de QR para gerar pairing code.'
-                                )
-                            )
-                        }, 20000)
-                    ),
-                ])
+                await this.waitForPairingBootstrap(sock)
+
+                const code = await sock.requestPairingCode(normalized)
+                this.instance.pairingCode = code
+                this.instance.pairingPhoneNumber = normalized
+                return code
             } catch (error: any) {
+                lastError = error
+
+                if (
+                    attempt < maxAttempts &&
+                    this.isPairingConnectionClosedError(error)
+                ) {
+                    logger.warn(
+                        {
+                            instanceKey: this.key,
+                            attempt,
+                            message: error?.message || String(error),
+                        },
+                        'STATE: Pairing code failed due to closed connection, retrying with fresh socket'
+                    )
+                    await sleep(1200)
+                    await this.teardownSocket()
+                    this.initPromise = null
+                    await this.init()
+                    continue
+                }
+
                 throw new Error(
                     error?.message ||
                         'Falha ao preparar conexão antes de gerar pairing code.'
@@ -309,16 +325,40 @@ export class WhatsAppInstance {
             }
         }
 
+        throw new Error(
+            lastError?.message || 'Falha ao gerar código de pareamento.'
+        )
+    }
+
+    async waitForPairingBootstrap(sock: any) {
+        // O fluxo recomendado do Baileys pede o pairing code após o evento de QR.
+        // Isso evita corrida em que o socket abriu, mas ainda não terminou o bootstrap.
+        if (typeof sock.waitForConnectionUpdate === 'function') {
+            await Promise.race([
+                sock.waitForConnectionUpdate((update: any) => Boolean(update?.qr)),
+                new Promise((_, reject) =>
+                    setTimeout(() => {
+                        reject(
+                            new Error(
+                                'Timeout aguardando estado de QR para gerar pairing code.'
+                            )
+                        )
+                    }, 20000)
+                ),
+            ])
+        }
+
         // Aguarda o handshake de noise com os servidores do WA antes de enviar
         // o IQ de pairing code (sendRawMessage rejeita se ws.isOpen === false).
         if (typeof sock.waitForSocketOpen === 'function') {
             await sock.waitForSocketOpen()
         }
+    }
 
-        const code = await sock.requestPairingCode(normalized)
-        this.instance.pairingCode = code
-        this.instance.pairingPhoneNumber = normalized
-        return code
+    isPairingConnectionClosedError(error: any): boolean {
+        const statusCode = error?.output?.statusCode || error?.statusCode
+        const message = String(error?.message || '').toLowerCase()
+        return statusCode === 428 || message.includes('connection closed')
     }
 
     async teardownSocket() {
