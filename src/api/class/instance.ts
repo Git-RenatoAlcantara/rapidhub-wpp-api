@@ -79,6 +79,12 @@ function createBaileysLogger() {
                         'No session found to decrypt message'
                     )
 
+                const isBadMacSessionError =
+                    message === 'Session error:' &&
+                    String(payload?.error?.message || payload?.err?.message || '')
+                        .toLowerCase()
+                        .includes('bad mac')
+
                 if (
                     level >= 50 &&
                     (
@@ -89,6 +95,15 @@ function createBaileysLogger() {
                     )
                 ) {
                     return this.warn(...args)
+                }
+
+                if (level >= 50 && isBadMacSessionError) {
+                    return this.warn(
+                        {
+                            reason: 'bad-mac',
+                        },
+                        'Session decrypt warning: Bad MAC em mensagem recebida (normalmente mensagem antiga ou estado de cifra defasado)'
+                    )
                 }
 
                 return method.apply(this, args)
